@@ -9,6 +9,15 @@ Deliberately short. v0.1 is usable for real note-taking; everything below is a n
 - [ ] Remembered caret position per note, so reopening lands where you left off.
 - [ ] Word-count goal / study-session timer per subject (optional, off by default).
 
+## v0.2.5 — shipped: textbooks, local AI, pen
+
+- Book/Page data model + Dexie v3, four import doors (EPUB with a hand-rolled zip reader, PDF via pdf.js, page images, blank paste-per-page).
+- Local OCR with the Italian `traineddata` vendored in `public/tessdata/`, so nothing downloads at runtime.
+- BM25 search over books with an Italian stemmer; page chunks with overlap; citations that jump.
+- Ollama-only AI (keyless, `fetch`, streaming) with an honest retrieval-only fallback; vision optional.
+- Vector pen on pages and inside notes, exported to SVG; reader side pane with Testo/Appunti/AI/Cerca.
+- Per-book Markdown export to a synced folder (`Titolo/pagine/0001.md`).
+
 ## v0.3 — content types
 - [ ] Tables (block type `table`, Markdown pipe tables, `Tab` between cells).
 - [ ] Math: inline `$…$` and a `math` block rendered by KaTeX, stored as LaTeX in the `.md` so it survives export.

@@ -1,4 +1,4 @@
-import type { Note, Subject, Topic } from '../core/types'
+import type { Book, Note, Subject, Topic } from '../core/types'
 
 export type Route =
   | { view: 'all' }
@@ -6,6 +6,8 @@ export type Route =
   | { view: 'topic'; subjectId: string; topicId: string }
   | { view: 'note'; subjectId: string; topicId: string; noteId: string }
   | { view: 'library'; filter?: string }
+  | { view: 'book'; bookId: string; page: number }
+  | { view: 'books' }
 
 export const routes = {
   all: '#/',
@@ -13,6 +15,8 @@ export const routes = {
   topic: (s: string, t: string) => `#/s/${s}/t/${t}`,
   note: (s: string, t: string, n: string) => `#/s/${s}/t/${t}/n/${n}`,
   library: (filter?: string) => `#/library${filter ? `/${filter}` : ''}`,
+  books: '#/books',
+  book: (id: string, page?: number) => `#/b/${id}${page ? `?p=${page}` : ''}`,
 }
 
 export function parseHash(): Route {
@@ -20,6 +24,12 @@ export function parseHash(): Route {
   const p = h.split('/').filter(Boolean)
   if (!p.length) return { view: 'all' }
   if (p[0] === 'library') return { view: 'library', filter: p[1] }
+  if (p[0] === 'books') return { view: 'books' }
+  if (p[0] === 'b' && p[1]) {
+    const id = p[1].split('?')[0]!
+    const page = Number(location.hash.match(/[?&]p=(\d+)/)?.[1] ?? 1)
+    return { view: 'book', bookId: id, page: Number.isFinite(page) && page > 0 ? page : 1 }
+  }
   if (p[0] === 's' && p[1]) {
     if (p[2] === 't' && p[3]) {
       if (p[4] === 'n' && p[5]) return { view: 'note', subjectId: p[1], topicId: p[3], noteId: p[5] }
@@ -48,6 +58,8 @@ class AppStore {
   subjectById = new Map<string, Subject>()
   topicById = new Map<string, Topic>()
   noteById = new Map<string, Note>()
+  books: Book[] = []
+  bookById = new Map<string, Book>()
   sidebarOpen = false
   paletteOpen = false
 

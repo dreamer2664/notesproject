@@ -1,4 +1,6 @@
-import type { Block, Note, Subject, Topic, Vault, VaultTree } from './types'
+import type { Block, Book, InkStroke, Note, Subject, Topic, Vault, VaultTree } from './types'
+export type VaultFile = { path: string; text: string }
+import { pageTexts } from './db'
 import { plainText } from './util'
 
 /**
@@ -92,6 +94,17 @@ export function blockToMd(b: Block): string {
       return `${pad}**${inlineToMd(b.content ?? '')}**`
     case 'image':
       return `![${b.alt ?? ''}](${b.src ?? ''})${b.caption ? `\n*${b.caption}*` : ''}`
+    case 'ink': {
+      const strokes = b.strokes ?? []
+      if (!strokes.length) return ''
+      return `✍️ scrittura a mano · svg: ${inkToSvg(strokes)}`
+    }
+    case 'page': {
+      if (!b.bookId || !b.pageNumber) return ''
+      const title = (b.label || 'libro').replace(/[|·\n]/g, ' ').trim()
+      const head = `📖 libro: ${b.bookId} | pagina: ${b.pageNumber} | ${title}`
+      return b.ink?.length ? `${head}\n✍️ annotazioni: ${inkToSvg(b.ink)}` : head
+    }
     case 'link': {
       const bits = [
         `- **[${((b.label || b.url) ?? '').replace(/[[\]]/g, '')}](${b.url})**`,
@@ -173,6 +186,7 @@ export function mdToBlocks(md: string): Block[] {
   const lines = md.replace(/\r\n/g, '\n').split('\n')
   const blocks: Block[] = []
   let fence: string[] | null = null
+  let pendingPage: Block | null = null
   const id = () => `b_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
   const push = (type: Block['type'], content: string, extra: Partial<Block> = {}) =>
     blocks.push({ id: id(), type, content, ...extra })
@@ -244,6 +258,19 @@ export function mdToBlocks(md: string): Block[] {
       push('image', '', { src: m[2]!, alt: m[1]!, caption: m[3]?.trim() || undefined })
       continue
     }
+    if ((m = t.match(/^📖 libro:\s*(\S+)\s*\|\s*pagina:\s*(\d+)(?:\s*\|\s*(.*?))?$/))) {
+      pendingPage = { id: id(), type: 'page', content: '', bookId: m[1]!, pageNumber: Number(m[2]), label: (m[3] ?? '').trim() || undefined }
+      blocks.push(pendingPage)
+      continue
+    }
+    if ((m = t.match(/^(?:✍️ scrittura a mano · svg: |✍️ annotazioni: )(.+)$/))) {
+      const strokes = svgToInk(m[1]!)
+      if (pendingPage) Object.assign(pendingPage, { ink: strokes })
+      else push('ink', '', { strokes })
+      pendingPage = null
+      continue
+    }
+    pendingPage = null
     // Whole-note headings exported as **bold** are the "open" toggles we wrote out.
     push('text', mdToInline(t), { indent })
   }
@@ -303,4 +330,70 @@ export function treeToVault(tree: VaultTree): Vault {
   return { version: 1, exportedAt: Date.now(), subjects, topics, notes }
 }
 
+/** Strokes -> one-line SVG (self-describing, so handwritten figures survive the export). */
+export function inkToSvg(strokes: InkStroke[]): string {
+  if (!strokes.length) return ''
+  const paths = strokes
+    .map((s) => {
+      const pts: number[] = s.d
+      let d = ''
+      for (let i = 0; i + 1 < pts.length; i += 2) d += `${i ? 'L' : 'M'}${pts[i]!.toFixed(1)} ${pts[i + 1]!.toFixed(1)}`
+      const hi = s.t === 'highlight'
+      return `<path d="${d}" stroke="${s.c}" stroke-width="${(s.w * (hi ? 5 : 1)).toFixed(1)}" opacity="${hi ? 0.32 : 1}" fill="none" stroke-linecap="round" stroke-linejoin="round"${hi ? ' style="mix-blend-mode:multiply"' : ''}/>`
+    })
+    .join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" preserveAspectRatio="none">${paths}</svg>`
+}
+
+/** The inverse, tolerant of hand-editing: only M/L paths in a 0..1000 box. */
+export function svgToInk(svg: string): InkStroke[] {
+  if (!svg.trim()) return []
+  const out: InkStroke[] = []
+  for (const m of svg.matchAll(/<path([^>]*)\/>/g)) {
+    const attrs = m[1]!
+    const d = attrs.match(/d="([^"]+)"/)?.[1] ?? ''
+    const color = attrs.match(/stroke="(#[0-9a-fA-F]{3,8})"/)?.[1] ?? '#1d1d1f'
+    const width = Number(attrs.match(/stroke-width="([\d.]+)"/)?.[1] ?? 2)
+    const highlight = /mix-blend-mode/.test(attrs) || /opacity="0\.3/.test(attrs)
+    const nums = d.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
+    if (nums.length < 2) continue
+    out.push({ t: highlight ? 'highlight' : 'pen', c: color, w: Math.max(0.4, highlight ? width / 5 : width), d: nums })
+  }
+  return out
+}
+
 export const blockPlainText = (b: Block) => (b.type === 'code' ? (b.content ?? '') : plainText(b.content ?? ''))
+
+/** ---------------------------------------------------------------- books */
+
+/** `Libro/<titolo>/0012.md` style archive for an imported book. */
+export async function vaultToBookFiles(book: Book): Promise<VaultFile[]> {
+  const pages = await pageTexts(book.id)
+  const files: VaultFile[] = [
+    {
+      path: `${book.title}/${book.title}.md`,
+      text: [
+        `# ${book.title}`,
+        '',
+        book.author ? `**${book.author}**` : '',
+        '',
+        `- formato: ${book.origin}`,
+        `- pagine: ${book.pageCount}`,
+        `- testo indicizzato: ${pages.filter((p) => p.text.trim().length > 20).length}/${book.pageCount}`,
+        `- importato: ${new Date(book.createdAt).toLocaleString('it-IT')}`,
+        '',
+        'Le pagine sono file separati, uno per pagina: li puoi leggere, cercare e modificare a mano.',
+      ]
+        .filter((l) => l !== '')
+        .join('\n') + '\n',
+    },
+  ]
+  for (const p of pages) {
+    const n = String(p.n).padStart(4, '0')
+    files.push({
+      path: `${book.title}/pagine/${n}.md`,
+      text: ['---', `page: ${p.n}`, `ocr: ${p.ocr}`, '---', '', `## Pagina ${p.n}`, '', p.text || '_(senza testo)_', ''].join('\n'),
+    })
+  }
+  return files
+}

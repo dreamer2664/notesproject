@@ -6,6 +6,11 @@
 import assert from 'node:assert/strict'
 import { blockToMd, mdToBlocks, noteToMd, treeToVault, vaultToFiles, inlineToMd } from '../src/core/md'
 import { filesToTree, linkInfo } from '../src/core/fs'
+import { chunkPage, Bm25, buildIndex, tokenize, stem, citePage } from '../src/core/search'
+import { pdfItemsToText, cleanOcr } from '../src/core/import'
+import { inkToSvg, svgToInk } from '../src/core/md'
+import { PALETTE, packPoints, unpackPoints, eraseAt, strokePaths } from '../src/core/ink'
+import type { InkStroke } from '../src/core/types'
 import type { Block, Note } from '../src/core/types'
 
 let n = 0
@@ -196,6 +201,140 @@ test('linkInfo: youtube embeds get a no-cookie player and a poster', () => {
 })
 test('linkInfo: a non-video link gets no embed', () => {
   assert.equal(linkInfo('https://en.wikipedia.org/wiki/Vector').embedUrl, undefined)
+})
+
+/* ---------------------------------------------------------------- search */
+test('search: Italian stems collapse plural/verb forms', () => {
+  assert.equal(stem('funzioni'), stem('funzione'))
+  assert.equal(stem('derivate'), stem('derivata'))
+  assert.notEqual(stem('cane'), stem('catasta'))
+  assert.notEqual(stem('libreria'), stem('libro'))
+  // stopwords never reach the index, so they cannot pollute a query
+  assert.deepEqual(tokenize('la e di che'), [])
+})
+test('search: accents and case are folded away', () => {
+  assert.deepEqual(tokenize('Energía Elettrica  È'), tokenize('energia elettrica e'))
+})
+test('search: BM25 ranks the page that actually talks about the term', () => {
+  const idx = buildIndex([
+    { n: 1, text: 'La fotosintesi clorofilliana avviene nei cloroplasti e produce glucosio.' },
+    { n: 2, text: 'Capitolo sulle derivate: la derivata di una funzione e la sua interpretazione geometrica.' },
+    { n: 3, text: 'Note sparse su storia medievale, feudalesimo e comuni.' },
+  ])
+  const hits = idx.search('derivata funzione', 5)
+  assert.ok(hits.length > 0)
+  assert.equal(hits[0]!.page, 2, `expected page 2 first, got ${hits.map((h) => h.page + ':' + h.score.toFixed(2)).join(' ')}`)
+  assert.ok(hits[0]!.score > 0)
+})
+test('search: a stopword-only query returns nothing instead of everything', () => {
+  const idx = buildIndex([{ n: 1, text: 'Il cosa come questo quella' }])
+  assert.deepEqual(idx.search('il e la di che', 5), [])
+})
+test('search: chunks overlap so a sentence on the seam is still found', () => {
+  const text = `${'a'.repeat(1300)} parabola ${'b'.repeat(1300)}`
+  const chunks = chunkPage(7, text)
+  assert.ok(chunks.length >= 2)
+  assert.ok(chunks.some((c) => /parabola/.test(c.text)), 'the keyword must live in at least one chunk')
+  assert.ok(chunks.every((c) => c.page === 7))
+})
+test('search: citations carry the page number for the jump', () => {
+  assert.equal(citePage('Fisica', 128), 'Fisica, p. 128')
+})
+
+/* ------------------------------------------------------------- pdf / ocr */
+test('pdf: lines are rebuilt from text items, hyphens glued back', () => {
+  const items = [
+    { str: 'La temperatura del si', transform: [1, 0, 0, 1, 10, 700] },
+    { str: 'stema aumenta', transform: [1, 0, 0, 1, 120, 700] },
+    { str: 'di un grado.', transform: [1, 0, 0, 1, 240, 700] },
+    { str: 'Seconda riga del paragrafo', transform: [1, 0, 0, 1, 10, 680] },
+  ]
+  const text = pdfItemsToText(items)
+  assert.ok(text.includes('sistema'), `hyphenated word should be glued: ${JSON.stringify(text)}`)
+  assert.equal(text.split('\n').length, 2)
+})
+test('ocr: control noise is stripped, line breaks inside a paragraph are not', () => {
+  const dirty = '   La   cinematica \n studia  il   moto.\n\n\nFine  .\n'
+  const clean = cleanOcr(dirty)
+  assert.ok(!/  /.test(clean), 'double spaces must be collapsed')
+  assert.ok(!/\\n\\n\\n/.test(clean), 'blank runs must collapse')
+  assert.ok(clean.includes('cinematica'))
+})
+
+/* --------------------------------------------------------------- ink */
+test('ink: points pack and unpack losslessly', () => {
+  const pts = [
+    { x: 0.1, y: 0.2, p: 0.5 },
+    { x: 0.9, y: 0.75, p: 1 },
+    { x: 0, y: 1, p: 0.2 },
+  ]
+  const packed = packPoints(pts)
+  assert.deepEqual(unpackPoints(packed).map((q) => [q.x, q.y, q.p]), pts.map((q) => [q.x, q.y, q.p]))
+})
+test('ink: svg round-trip keeps tool, colour, width and geometry', () => {
+  const strokes: InkStroke[] = [
+    { t: 'pen', c: '#0a84ff', w: 1.6, d: packPoints([{ x: 0.1, y: 0.2, p: 0.5 }, { x: 0.4, y: 0.6, p: 0.9 }]) },
+    { t: 'highlight', c: PALETTE[4]!.c, w: 2.4, d: packPoints([{ x: 0.2, y: 0.3, p: 1 }, { x: 0.8, y: 0.3, p: 1 }]) },
+  ]
+  const svg = inkToSvg(strokes)
+  assert.ok(svg.startsWith('<svg') && svg.endsWith('</svg>'))
+  const back = svgToInk(svg)
+  assert.equal(back.length, 2)
+  assert.equal(back[0]!.t, 'pen')
+  assert.equal(back[1]!.t, 'highlight')
+  assert.equal(back[0]!.c, '#0a84ff')
+  assert.ok(Math.abs(back[0]!.w - 1.6) < 0.2, `width survived badly: ${back[0]!.w}`)
+  assert.ok(Math.abs(back[0]!.d[0]! - strokes[0]!.d[0]!) < 1.5, 'x is in the same place')
+})
+test('ink: paths are one polyline per stroke and scale with pressure', () => {
+  const strokes: InkStroke[] = [{ t: 'pen', c: '#1d1d1f', w: 1, d: packPoints([{ x: 0, y: 0, p: 0.2 }, { x: 0.5, y: 0.5, p: 1 }, { x: 1, y: 0.2, p: 0.4 }]) }]
+  const pieces = strokePaths(strokes[0]!)
+  assert.ok(pieces.length >= 1)
+  assert.ok(pieces.every((pc) => pc.d.startsWith('M')), 'every piece starts at a point')
+  assert.ok(pieces.every((pc) => pc.w > 0), 'pressure gives each piece a width')
+})
+test('ink: the eraser removes whole strokes, not pixels', () => {
+  const a: InkStroke = { t: 'pen', c: '#1d1d1f', w: 1, d: packPoints([{ x: 0.1, y: 0.1, p: 1 }, { x: 0.2, y: 0.2, p: 1 }]) }
+  const b: InkStroke = { t: 'pen', c: '#1d1d1f', w: 1, d: packPoints([{ x: 0.8, y: 0.8, p: 1 }, { x: 0.9, y: 0.9, p: 1 }]) }
+  const left = eraseAt([a, b], 0.12, 0.12, 0.03)
+  assert.equal(left.length, 1)
+  assert.equal(left[0], b)
+})
+test('ink: empty drawings export as nothing', () => {
+  assert.equal(inkToSvg([]), '')
+  assert.deepEqual(svgToInk(''), [])
+})
+
+/* ------------------------------------------------- new blocks in markdown */
+test('md: a handwriting block survives the trip to disk', () => {
+  const strokes: InkStroke[] = [{ t: 'pen', c: '#1d1d1f', w: 1.2, d: packPoints([{ x: 0.2, y: 0.3, p: 0.7 }, { x: 0.5, y: 0.9, p: 1 }]) }]
+  const md = blockToMd(block('ink', { strokes }))
+  const back = mdToBlocks(md)
+  assert.equal(back.length, 1)
+  assert.equal(back[0]!.type, 'ink')
+  assert.equal(back[0]!.strokes?.length, 1)
+  assert.ok(Math.abs((back[0]!.strokes?.[0]?.d[0] ?? 0) - strokes[0]!.d[0]!) < 1.5)
+})
+test('md: a textbook page block keeps its book and page number', () => {
+  const md = blockToMd(block('page', { bookId: 'k_42', pageNumber: 128, label: 'Fisica blu' }))
+  assert.match(md, /📖 libro: k_42 \| pagina: 128 \| Fisica blu/)
+  const back = mdToBlocks(md)
+  assert.equal(back.length, 1)
+  assert.equal(back[0]!.type, 'page')
+  assert.equal(back[0]!.bookId, 'k_42')
+  assert.equal(back[0]!.pageNumber, 128)
+  assert.equal(back[0]!.label, 'Fisica blu')
+})
+test('md: a page block with annotations exports the ink too', () => {
+  const ink: InkStroke[] = [{ t: 'highlight', c: '#ffd43b', w: 2, d: packPoints([{ x: 0.1, y: 0.4, p: 1 }, { x: 0.6, y: 0.4, p: 1 }]) }]
+  const md = blockToMd(block('page', { bookId: 'k_1', pageNumber: 3, label: 'Libro', ink }))
+  const back = mdToBlocks(md)
+  assert.equal(back[0]!.type, 'page')
+  assert.equal(back[0]!.ink?.length, 1)
+  assert.equal(back[0]!.ink?.[0]?.t, 'highlight')
+})
+test('md: an empty page block writes nothing', () => {
+  assert.equal(blockToMd(block('page', {})), '')
 })
 
 /* -------------------------------------------------------------- run them */

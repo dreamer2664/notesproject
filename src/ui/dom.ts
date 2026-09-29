@@ -2,6 +2,8 @@ import { icons } from './icons'
 
 type Kid = Node | string | null | undefined
 export function el(tag: 'input', props?: Record<string, unknown>, ...kids: Kid[]): HTMLInputElement
+export function el(tag: 'textarea', props?: Record<string, unknown>, ...kids: Kid[]): HTMLTextAreaElement
+export function el(tag: 'select', props?: Record<string, unknown>, ...kids: Kid[]): HTMLSelectElement
 export function el<T extends HTMLElement = HTMLDivElement>(tag: string, props?: Record<string, unknown>, ...kids: Kid[]): T
 export function el(tag: string, props: Record<string, unknown> = {}, ...kids: Kid[]): HTMLElement {
   const node = document.createElement(tag) as HTMLElement
@@ -39,7 +41,7 @@ export function modal(opts: {
   title: string
   subtitle?: string
   body?: HTMLElement
-  fields?: { name: string; label: string; value?: string; placeholder?: string; type?: string; list?: string[] }[]
+  fields?: { name: string; label: string; value?: string; placeholder?: string; type?: string; list?: string }[]
   datalist?: { id: string; options: string[] }[]
   actions?: { label: string; kind?: 'primary' | 'danger' | 'ghost'; value: string }[]
   wide?: boolean
@@ -54,6 +56,13 @@ export function modal(opts: {
     const values = () => {
       const out: Record<string, string> = {}
       for (const [k, input] of Object.entries(inputs)) out[k] = input.value
+      // a custom body may carry its own fields: they count too
+      if (opts.body)
+        for (const n of Array.from(opts.body.querySelectorAll<HTMLElement>('[data-field]'))) {
+          const el2 = n as HTMLInputElement
+          if (el2.type === 'checkbox') out[n.dataset.field!] = el2.checked ? 'true' : ''
+          else out[n.dataset.field!] = el2.value ?? ''
+        }
       return out
     }
 
@@ -68,6 +77,7 @@ export function modal(opts: {
         value: f.value ?? '',
         type: f.type ?? 'text',
         list: f.list,
+        'data-field': f.name,
         autocomplete: 'off',
         spellcheck: 'false',
       })

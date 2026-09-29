@@ -1,4 +1,7 @@
-import { listTopics, searchNotes } from '../core/db'
+import { listBooks, listTopics, pageTexts, searchNotes } from '../core/db'
+import { Bm25, buildIndex } from '../core/search'
+import { openImport } from './books'
+import { aiSettingsModal } from './ai-settings'
 import { exportToFolder, importFromFolder, newNote, newSubject, newTopic, quickCaptureLink, refreshFromFolder } from './actions'
 import { el } from './dom'
 import { icon } from './icons'
@@ -11,6 +14,26 @@ interface Item {
   group: string
   glyph?: string
   run: () => void
+}
+
+/** Page hits across imported books (needs the book text layer; OCR first if empty). */
+async function searchBooks(q: string): Promise<Item[]> {
+  const books = await listBooks()
+  const out: Item[] = []
+  for (const book of books) {
+    if (out.length >= 6) break
+    const idx = buildIndex(await pageTexts(book.id))
+    for (const hit of idx.search(q, 3)) {
+      out.push({
+        label: `${book.title} · p. ${hit.page}`,
+        hint: Bm25.snippet(hit.text, q).replace(/\s+/g, ' ').slice(0, 90),
+        group: 'Pagine dei libri',
+        glyph: `<span class="pal-emoji">📖</span>`,
+        run: () => (location.hash = routes.book(book.id, hit.page)),
+      })
+    }
+  }
+  return out
 }
 
 export async function openPalette(initialQuery = '') {
@@ -43,6 +66,9 @@ export async function openPalette(initialQuery = '') {
       },
       { label: 'Save a link from the clipboard', hint: '⌘⇧L', group: 'Create', glyph: icon('link'), run: () => void quickCaptureLink() },
       { label: 'Link library', group: 'Go to', glyph: icon('link'), run: () => (location.hash = routes.library('all')) },
+      { label: 'Testi (libri importati)', group: 'Go to', glyph: icon('book'), run: () => (location.hash = routes.books) },
+      { label: 'Import a book', hint: 'EPUB · PDF · immagini', group: 'Create', glyph: icon('upload'), run: () => void openImport() },
+      { label: 'AI locale: modello, visione, contesto', group: 'App', glyph: icon('menu'), run: () => void aiSettingsModal() },
       { label: 'All subjects', group: 'Go to', glyph: icon('grid'), run: () => (location.hash = routes.all) },
       ...App.subjects.map((s) => ({ label: s.name, hint: 'subject', group: 'Go to', glyph: `<span class="pal-emoji">${s.emoji}</span>`, run: () => (location.hash = routes.subject(s.id)) })),
       { label: document.documentElement.dataset.theme === 'dark' ? 'Light appearance' : 'Dark appearance', group: 'App', glyph: icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon'), run: () => void toggleTheme() },
@@ -56,6 +82,7 @@ export async function openPalette(initialQuery = '') {
   const paint = async () => {
     const q = input.value.trim()
     const found = q ? await searchNotes(q) : []
+    const bookHits = q ? await searchBooks(q) : []
     const hits: Item[] = found.map((hit) => ({
       label: hit.note.title,
       hint: `${hit.subject.name} › ${hit.topic.name}`,
@@ -64,7 +91,7 @@ export async function openPalette(initialQuery = '') {
       run: () => (location.hash = routes.note(hit.subject.id, hit.topic.id, hit.note.id)),
     }))
     const cmds = commands().filter((c) => !q || c.label.toLowerCase().includes(q.toLowerCase()) || c.group.toLowerCase().includes(q.toLowerCase()))
-    items = [...hits, ...cmds]
+    items = [...hits, ...bookHits, ...cmds]
     active = Math.min(active, Math.max(0, items.length - 1))
     const groups: [string, Item[]][] = []
     for (const it of items) {

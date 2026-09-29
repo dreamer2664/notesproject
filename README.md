@@ -8,7 +8,7 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Other commands: `npm run build` (typecheck + production bundle), `npm test` (21 unit tests + a jsdom smoke test that boots the real app), `npm run typecheck`.
+Other commands: `npm run build` (typecheck + production bundle), `npm test` (38 unit tests + a jsdom smoke test that boots the real app, reader and all), `npm run typecheck`.
 
 ---
 
@@ -23,6 +23,10 @@ Other commands: `npm run build` (typecheck + production bundle), `npm test` (21 
 **⌘K (Ctrl+K)** searches every note and runs commands. `/` outside a note jumps into the editor.
 
 **Two appearances.** Follows your system setting, or pin one from the sidebar. Colours, spacing and fonts are all in one file — see *Theming* below.
+
+**Textbooks are a first-class content type.** `Ctrl+Shift+B` opens the import dialog: drop an EPUB (the one Adobe Digital Editions / laZ / "libro liquido" hand you), a PDF, or a folder of page images. Pages become image + text, with **local OCR** (Italian model vendored inside the app, so it works with the wifi off). The reader is split-screen — page on the left, `Testo / Appunti / AI / Cerca` on the right — and `p` gives you a pen that writes on the page itself. See [`docs/LIBRI-AI-PENNA.md`](docs/LIBRI-AI-PENNA.md) (Italian) for the per-publisher how-to.
+
+**AI with no key, no cloud, no bill.** The AI tab talks to **Ollama on your own machine** (`127.0.0.1:11434`) — no API key, no account, nothing leaves the PC. Retrieval is done in-app (BM25 over the book, Italian stemmer), so the model gets the pages that actually matter, with page numbers that are clickable in the answer. No model installed? The tab still answers honestly by quoting the book.
 
 **Your files are the archive.** Export writes a folder of plain `.md` files: `Subject/Topic/Note.md`, plus `notes.vault.json` (ids, icons, order) and a `README.txt`. Nothing is locked in. Import reads that folder back.
 
@@ -53,9 +57,13 @@ src/
   main.ts             boot, hash router, keyboard shortcuts
   styles.css          every design token, both appearances, all responsive rules
   core/
-    types.ts          the data model (Subject / Topic / Note / Block)
-    db.ts             Dexie (IndexedDB) + every query and mutation
-    md.ts             block <-> Markdown, folder tree <-> vault, both directions
+    types.ts          the data model (Subject / Topic / Note / Block / Book / Page / InkStroke)
+    db.ts             Dexie (IndexedDB) + every query and mutation, books and pages included
+    md.ts             block <-> Markdown, folder tree <-> vault, both directions (ink exports as SVG)
+    import.ts         the four doors in: EPUB (own zip reader), PDF (pdf.js), page images + OCR, blank book
+    search.ts         BM25 with an Italian stemmer, chunking, snippets, page citations
+    ai.ts             Ollama over fetch: config, streaming, context building, retrieval fallback
+    ink.ts            vector pen/highlighter/eraser, palm rejection, toolbar, SVG export
     fs.ts             folder read/write (File System Access API + <input> fallback), link detection, image downscaling
     util.ts           ids, sanitising, dates, small text helpers
   ui/
@@ -63,6 +71,9 @@ src/
     views.ts          dashboard, subject, topic, sidebar tree, note cards
     note.ts           the note screen: title, meta, editor mount, References panel
     library.ts        cross-subject link library with filters
+    reader.ts         the textbook reader: split panes, page ink, search, AI panel, book tools
+    books.ts          import dialog, book cards, export-a-book-to-folder
+    ai-settings.ts    the Ollama dialog (model, vision, context size), reachable from ⌘K too
     palette.ts        ⌘K search + commands
     actions.ts        every create / rename / move / delete / import / export flow
     dom.ts            element helper, modal, toast, confirm
@@ -100,7 +111,9 @@ Three places, deliberately: `Block['type']` in `core/types.ts`, rendering in `ed
 ## Known limits (v0.1)
 
 - One browser profile = one library. IndexedDB is per-origin, so `localhost:5173` on your PC and the same folder on your phone are two separate stores until you sync the folder. No real-time multi-device editing — that would need a server, and you asked for free.
-- Images are stored inside the note as data URIs (downscaled to 1600px max). Good for a study app; a folder full of scanned PDFs would be better served by files next to the notes, which is a v2 change.
+- Images are stored inside the note as data URIs (downscaled to 1600px max). Imported books store page images as data URIs too: a 300-page book is ~40–90 MB of IndexedDB. The reader's **Libro → Togli solo le immagini** keeps the text and frees the space.
+- DRM stays out of scope on purpose: no scraping of the publisher's web reader. What publishers hand over as a file (EPUB/PDF/images) is what gets imported; anything else goes through paste-per-page.
+- Local AI is as fast as your machine: on an old 8 GB laptop expect 20–60 s per answer, and no AI at all when the app is open on your phone away from the PC (that is what "no server" costs).
 - Tables, math (LaTeX), and backlinks between notes are not in yet.
 - On iOS Safari the folder read/write API isn't available; use **Backup / Import** with the Files app, or wait for v2 where a share-sheet flow is planned.
 

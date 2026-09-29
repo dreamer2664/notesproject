@@ -1,4 +1,6 @@
 import {
+  getBook,
+  listBooks,
   listNotes,
   listTopics,
   moveNote,
@@ -9,6 +11,7 @@ import type { Block, Note, Subject, Topic } from '../core/types'
 import { fmtRelative, htmlToText } from '../core/util'
 import { icons } from './icons'
 import { App, routes, type Route } from './state'
+import { bookCard, openImport, renderSubjectBooks } from './books'
 import {
   newNote,
   newSubject,
@@ -118,8 +121,18 @@ export async function renderSidebar(host: HTMLElement, route: Route) {
   const nav = h('div', { class: 'side-scroll' })
   nav.append(
     sideLink('Library of links', icons.link, routes.library('all'), route.view === 'library'),
+    sideLink('Testi', icons.book, routes.books, route.view === 'books' || route.view === 'book'),
     sideLine(),
   )
+  if (route.view === 'book') {
+    const open = await getBook(route.bookId)
+    if (open) nav.append(h('div', { class: 'side-book' }, h('span', { class: 'side-book-label', text: 'Lettore aperto' }), h('span', { class: 'side-book-name', text: open.title })))
+  } else if (subjectId) {
+    const books = (await listBooks()).filter((b) => b.subjectId === subjectId)
+    for (const b of books.slice(0, 6)) {
+      nav.append(h('a', { class: 'side-book', href: routes.book(b.id, 1) }, h('span', { class: 'side-book-ic', html: icons.book }), h('span', { class: 'side-book-name', text: b.title }), h('span', { class: 'count', text: String(b.pageCount) })))
+    }
+  }
 
   if (!App.subjects.length) {
     nav.append(h('div', { class: 'side-empty' },
@@ -259,6 +272,7 @@ export async function renderAll(host: HTMLElement) {
         h('h1', { text: 'Subjects' }),
         h('p', { class: 'lede', text: `${App.subjects.length} subject${App.subjects.length === 1 ? '' : 's'} · ${notes.length} note${notes.length === 1 ? '' : 's'}. Press ⌘K to jump anywhere.` })),
       h('div', { class: 'view-head-actions' },
+        h('button', { class: 'btn', type: 'button', html: `${icons.book}<span>Importa libro</span>`, onclick: () => void openImport() }),
         h('button', { class: 'btn primary', type: 'button', html: `${icons.plus}<span>New subject</span>`, onclick: () => void newSubject() }))),
   )
   if (!App.subjects.length) {
@@ -300,6 +314,19 @@ export async function renderAll(host: HTMLElement) {
     }
     host.append(h('section', { class: 'section' }, h('h3', { class: 'section-title', text: 'Recently edited' }), list))
   }
+
+  const books = await listBooks()
+  const strip = h('section', { class: 'section' })
+  strip.append(h('div', { class: 'section-head' }, h('h3', { class: 'section-title', text: 'Testi' }),
+    h('button', { class: 'btn ghost small', type: 'button', text: 'Importa', onclick: () => void openImport() })))
+  if (!books.length) {
+    strip.append(h('p', { class: 'lede dim', text: 'Nessun libro importato. EPUB (quello di Adobe Digital Editions, laZ, “libro liquido”), PDF o una cartella di immagini: diventano cercabili, con OCR e penna.' }))
+  } else {
+    const grid = h('div', { class: 'book-grid' })
+    for (const b of books.slice(0, 8)) grid.append(await bookCard(b, true))
+    strip.append(grid)
+  }
+  host.append(strip)
 }
 
 export async function collectNotes(subject: Subject) {
@@ -322,6 +349,7 @@ export async function renderSubject(host: HTMLElement, subjectId: string) {
     h('header', { class: 'view-head' },
       h('div', { class: 'view-head-text' },
         h('div', { class: 'kicker' }, h('span', { class: 'kicker-emoji', text: subject.emoji }), h('span', { text: 'Subject' })),
+        h('div', { class: 'subject-books-row' }, await renderSubjectBooks(subjectId)),
         h('h1', { text: subject.name, class: 'view-title' }),
         h('p', { class: 'lede', text: `${topics.length} topic${topics.length === 1 ? '' : 's'} · click a topic to open its notes` })),
       h('div', { class: 'view-head-actions' },

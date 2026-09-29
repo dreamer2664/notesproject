@@ -19,6 +19,8 @@ export type BlockType =
   | 'divider'
   | 'image'
   | 'link'
+  | 'ink'
+  | 'page'
 
 export interface Block {
   id: string
@@ -45,6 +47,51 @@ export interface Block {
   read?: boolean
   embed?: boolean
   addedAt?: number
+  /** ink blocks: the drawing itself */
+  strokes?: InkStroke[]
+  /** page blocks: a pointer into an imported book */
+  bookId?: string
+  pageNumber?: number
+  ink?: InkStroke[]
+}
+
+export type InkTool = 'pen' | 'highlight' | 'eraser'
+
+/** One pen/highlighter stroke. Points are normalised (0..1) so the drawing
+ *  scales with the pane instead of the pixels it was drawn on. */
+export interface InkStroke {
+  t: InkTool
+  c: string
+  w: number
+  /** x, y, pressure triples in 0..1 space */
+  d: number[]
+}
+
+export interface Book {
+  id: string
+  title: string
+  author?: string
+  subjectId?: string
+  pageCount: number
+  /** how the text layer was obtained */
+  origin: 'pdf' | 'epub' | 'images' | 'manual'
+  quality?: string
+  textCoverage?: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Page {
+  id: string
+  bookId: string
+  n: number
+  text: string
+  /** data URL, optional on purpose: a text-only book is still useful */
+  image?: string
+  imageW?: number
+  imageH?: number
+  ink?: InkStroke[]
+  ocr?: 'text' | 'ocr' | 'none'
 }
 
 export interface Subject {

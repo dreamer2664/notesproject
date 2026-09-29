@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { Block, Note, Revision, Settings, Subject, Topic, Vault } from './types'
+import type { Block, Book, InkStroke, Note, Page, Revision, Settings, Subject, Topic, Vault } from './types'
 
 /** Anything we need to remember that is not a note: e.g. the folder handle for syncing. */
 interface MetaEntry {
@@ -20,6 +20,8 @@ class NotesDB extends Dexie {
   notes!: Table<Note, string>
   revisions!: Table<Revision, string>
   meta!: Table<MetaEntry, string>
+  books!: Table<Book, string>
+  pages!: Table<Page, string>
 
   constructor() {
     super('notes')
@@ -30,6 +32,10 @@ class NotesDB extends Dexie {
       revisions: 'id, noteId, at',
     })
     this.version(2).stores({ meta: 'key' })
+    this.version(3).stores({
+      books: 'id, title, subjectId, updatedAt',
+      pages: 'id, bookId, n, [bookId+n]',
+    })
   }
 }
 
@@ -129,6 +135,7 @@ export async function moveNote(noteId: string, toTopicId: string) {
 export async function deleteSubject(id: string) {
   const topics = await listTopics(id)
   await Promise.all(topics.map((t) => deleteTopic(t.id)))
+  for (const b of await listBooks(id)) await deleteBook(b.id)
   await db.subjects.delete(id)
 }
 
@@ -276,12 +283,27 @@ export async function exportVault(): Promise<Vault> {
 }
 
 export async function replaceVault(vault: Vault) {
-  await db.transaction('rw', db.subjects, db.topics, db.notes, db.revisions, async () => {
-    await Promise.all([db.subjects.clear(), db.topics.clear(), db.notes.clear(), db.revisions.clear()])
-    await db.subjects.bulkPut(vault.subjects ?? [])
-    await db.topics.bulkPut(vault.topics ?? [])
-    await db.notes.bulkPut(vault.notes ?? [])
-  })
+  await db.transaction(
+    'rw',
+    [db.subjects, db.topics, db.notes, db.revisions, db.books, db.pages],
+    async (tx) => {
+      const tables = {
+        subjects: db.subjects,
+        topics: db.topics,
+        notes: db.notes,
+        revisions: db.revisions,
+        books: db.books,
+        pages: db.pages,
+      }
+      await Promise.all(
+        [tables.subjects, tables.topics, tables.notes, tables.revisions, tables.books, tables.pages].map((t) => t.clear()),
+      )
+      void tx
+      await tables.subjects.bulkPut(vault.subjects ?? [])
+      await tables.topics.bulkPut(vault.topics ?? [])
+      await tables.notes.bulkPut(vault.notes ?? [])
+    },
+  )
 }
 
 export async function mergeVault(vault: Vault) {
@@ -322,6 +344,46 @@ export async function mergeVault(vault: Vault) {
     added++
   }
   return added
+}
+
+/* ------------------------------------------------------------------ books */
+
+export async function listBooks(subjectId?: string) {
+  const all = await db.books.toArray()
+  const books = subjectId ? all.filter((b) => b.subjectId === subjectId) : all
+  return books.sort((a, b) => a.title.localeCompare(b.title))
+}
+export const getBook = (id: string) => db.books.get(id)
+export async function putBook(book: Book) {
+  await db.books.put({ ...book, updatedAt: Date.now() })
+}
+export async function getPage(bookId: string, n: number) {
+  return db.pages.where('[bookId+n]').equals([bookId, n]).first()
+}
+export async function getPages(bookId: string, from: number, to: number) {
+  const all = await db.pages.where('bookId').equals(bookId).toArray()
+  return all.filter((p) => p.n >= from && p.n <= to).sort((a, b) => a.n - b.n)
+}
+export const pageCount = (bookId: string) => db.pages.where('bookId').equals(bookId).count()
+export async function putPages(pages: Page[]) {
+  await db.pages.bulkPut(pages)
+}
+export async function setPageInk(bookId: string, n: number, ink: InkStroke[]) {
+  const page = await getPage(bookId, n)
+  if (page) await db.pages.update(page.id, { ink })
+}
+export async function pageTexts(bookId: string) {
+  const pages = await db.pages.where('bookId').equals(bookId).toArray()
+  return pages.sort((a, b) => a.n - b.n).map((p) => ({ n: p.n, text: p.text ?? '', ocr: p.ocr ?? 'none' }))
+}
+export async function deleteBook(id: string) {
+  await db.pages.where('bookId').equals(id).delete()
+  await db.books.delete(id)
+}
+/** Rough size of a book's images, for the "this will cost you MB" warning. */
+export async function bookBytes(bookId: string) {
+  const pages = await db.pages.where('bookId').equals(bookId).toArray()
+  return pages.reduce((sum, p) => sum + (p.image ? Math.round(p.image.length * 0.75) : 0), 0)
 }
 
 /* ------------------------------------------------------------------- seeds */
@@ -409,6 +471,48 @@ export async function seedIfEmpty(): Promise<boolean> {
     b('text', 'This app borrows all four. Toggle the theme with the sun/moon button in the sidebar.'),
   ])
   await createTopic(design.id, 'Notes on notes', '🗒️')
+
+  /* A sample "book" so the reader, the pen and the search have something to show
+     on first run — the shape of a real import, without shipping copyrighted text. */
+  const pagesText = [
+    'La derivata misura quanto cambia una funzione al variare della sua variabile. Sia f(x) = x^2: il rapporto incrementale (f(x+h) - f(x))/h tende a 2x quando h tende a zero.',
+    'Regole di derivazione: la derivata di una somma e la somma delle derivate; la derivata di un prodotto f·g vale f\'g + fg\'; il quoziente segue la regola (f\'g - fg\')/g^2.',
+    'Le funzioni notevoli: seno e coseno si derivano l\'uno nell\'altro, l\'esponenziale resta se stesso. Il grafico della derivata seconda dice dove la curva e concava.',
+    'Esercizi: calcola la derivata di x^3 ln x, studia il segno della derivata prima, trova i punti di flesso della curva data.',
+  ]
+  const sampleBook: Book = {
+    id: uid('k'),
+    title: 'Manuale di esempio — Derivate',
+    author: 'notes · pagina dimostrativa',
+    subjectId: linear.id,
+    pageCount: pagesText.length,
+    origin: 'manual',
+    textCoverage: 1,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }
+  await db.books.put(sampleBook)
+  await db.pages.bulkPut(
+    pagesText.map((text, i) => ({
+      id: uid('p'),
+      bookId: sampleBook.id,
+      n: i + 1,
+      text,
+      ocr: 'text' as const,
+      ...(i === 0
+        ? {
+            ink: [
+              {
+                t: 'highlight' as const,
+                c: '#ffd43b',
+                w: 2.2,
+                d: [40, 232, 250, 232, 470, 232, 690, 232, 900, 232],
+              },
+            ],
+          }
+        : {}),
+    })),
+  )
 
   await setSettings({ seeded: true })
   return true

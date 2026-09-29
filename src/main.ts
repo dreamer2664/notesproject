@@ -2,6 +2,9 @@ import './styles.css'
 import { listAllNotes, listAllTopics, listSubjects, seedIfEmpty, getSettings, setSettings } from './core/db'
 import { renderSidebar, renderAll, renderSubject, renderTabBar, renderTopic } from './ui/views'
 import { renderLibrary } from './ui/library'
+import { openImport, renderBooks } from './ui/books'
+import { closeReader, patchReader, renderReader } from './ui/reader'
+import { listBooks } from './core/db'
 import { renderNote } from './ui/note'
 import { buildShell, routeTitle } from './ui/shell'
 import { el } from './ui/dom'
@@ -14,7 +17,9 @@ let shell: ReturnType<typeof buildShell> | null = null
 let controller: AbortController | null = null
 
 async function loadCaches() {
-  const subjects = await listSubjects()
+  const [subjects, books] = await Promise.all([listSubjects(), listBooks()])
+  App.books = books
+  App.bookById = new Map(books.map((x) => [x.id, x]))
   App.subjects = subjects
   App.subjectById = new Map(subjects.map((s) => [s.id, s]))
   const topics = await listAllTopics()
@@ -24,6 +29,8 @@ async function loadCaches() {
 }
 
 function routeHash(r: Route): string {
+  if (r.view === 'books') return routes.books
+  if (r.view === 'book') return routes.book(r.bookId, r.page)
   if (r.view === 'all') return routes.all
   if (r.view === 'library') return routes.library(r.filter)
   if (r.view === 'subject') return routes.subject(r.subjectId)
@@ -35,7 +42,13 @@ async function render() {
   if (!shell) return
   const route = parseHash()
   const isSameRoute = App.route.view === route.view && routeHash(App.route) === routeHash(route)
+  // turning a page must not rebuild the reader: it only moves the page
+  if (route.view === 'book' && App.route.view === 'book' && route.bookId === App.route.bookId && !isSameRoute) {
+    App.route = route
+    if (patchReader(route.bookId, route.page)) return
+  }
   App.route = route
+  if (route.view !== 'book') closeReader()
 
   controller?.abort()
   const next = new AbortController()
@@ -64,6 +77,8 @@ async function render() {
 
   try {
     if (route.view === 'all') await renderAll(view)
+    else if (route.view === 'books') await renderBooks(view)
+    else if (route.view === 'book') await renderReader(view, route.bookId, route.page, next.signal)
     else if (route.view === 'library') await renderLibrary(view, route.filter ?? 'all')
     else if (route.view === 'subject') await renderSubject(view, route.subjectId)
     else if (route.view === 'topic') await renderTopic(view, route.subjectId, route.topicId)
@@ -91,6 +106,11 @@ function bindShortcuts() {
     if (mod && e.shiftKey && e.key.toLowerCase() === 'l') {
       e.preventDefault()
       void quickCaptureLink()
+      return
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'b') {
+      e.preventDefault()
+      void openImport()
       return
     }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'n') {

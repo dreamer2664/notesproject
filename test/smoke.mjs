@@ -58,7 +58,7 @@ if (!window.crypto?.randomUUID) {
 // localStorage exists in jsdom; clipboard and file pickers do not, so stub the calls the app guards.
 Object.defineProperty(window.navigator, 'clipboard', { value: { writeText: async () => {}, readText: async () => '' }, configurable: true })
 
-for (const key of [ 'document', 'Element', 'HTMLElement', 'Node', 'Event', 'CustomEvent', 'DOMParser', 'XMLSerializer', 'navigator', 'localStorage', 'location', 'getComputedStyle', 'requestAnimationFrame', 'Image', 'Blob', 'File', 'FileReader', 'performance']) {
+for (const key of [ 'document', 'Element', 'HTMLElement', 'Node', 'Event', 'CustomEvent', 'DOMParser', 'XMLSerializer', 'navigator', 'localStorage', 'location', 'getComputedStyle', 'requestAnimationFrame', 'Image', 'Blob', 'File', 'FileReader', 'performance', 'history', 'HTMLCollection']) {
   Object.defineProperty(globalThis, key, { value: window[key] ?? globalThis[key], configurable: true, writable: true })
 }
 Object.defineProperty(globalThis, 'window', { value: window, configurable: true, writable: true })
@@ -117,9 +117,11 @@ const run = async () => {
     .map((a) => a.getAttribute('href'))
     .find(Boolean)
   assert.ok(href, 'no recent-note link to follow')
-  const openNote = async (hash) => {
-    window.location.hash = hash
-    window.dispatchEvent(new window.Event('hashchange'))
+  const openNote = async (hash, patchable = false) => {
+    // a page change inside a book is a *patch*, not a navigation: no hashchange event
+    if (!patchable) window.location.hash = hash
+    else window.location.hash = hash
+    if (!patchable) window.dispatchEvent(new window.Event('hashchange'))
     await tick(400)
   }
   await openNote(href)
@@ -255,6 +257,87 @@ const run = async () => {
   )
 
   const linkNotes = vault.notes.filter((n) => n.blocks.some((b) => b.type === 'link')).length
+
+  /* ------------------------------------------------ books, reader, pen, AI */
+  const booksLink = Array.from(doc.querySelectorAll('a')).find((a) => (a.getAttribute('href') ?? '') === '#/books')
+  assert.ok(booksLink, 'sidebar has no "Testi" entry')
+  await openNote('#/books')
+  await tick(350)
+  const cards = doc.querySelectorAll('.book-card')
+  assert.ok(cards.length >= 1, `no book cards on the books view: ${doc.querySelectorAll('.book-card').length}`)
+  assert.ok(doc.querySelector('.book-card .cover-origin')?.textContent?.trim(), 'book card lost its origin badge')
+  const sampleHref = doc.querySelector('.book-open')?.getAttribute('href') ?? ''
+  assert.match(sampleHref, /^#\/b\//, 'book card does not link to the reader')
+
+  await openNote(sampleHref)
+  await tick(400)
+  assert.ok(doc.querySelector('.reader .page-view'), 'reader did not render the page pane')
+  assert.ok(doc.querySelector('.reader .rtitle b')?.textContent?.includes('Derivate'), 'reader header lost the book title')
+  assert.ok(doc.querySelector('.reader .side-tabs'), 'reader side pane missing')
+  assert.ok(doc.querySelectorAll('.reader .ink-svg path').length >= 1, 'the seeded page annotation did not render as ink')
+  assert.ok(doc.querySelector('.reader .page-text-edit'), 'text tab did not show the page text')
+
+  // turning a page must not rebuild the whole reader: the same <svg> node stays alive
+  const svgBefore = doc.querySelector('.reader .ink-svg')
+  const nextBtn = doc.querySelector('.rnav .rbtn[title*="successiva"]')
+  assert.ok(nextBtn, 'reader has no next-page button')
+  nextBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(300)
+  assert.equal(doc.querySelector('.page-jump')?.value, '2', 'next-page button did not move the page')
+  assert.equal(doc.querySelector('.reader .ink-svg'), svgBefore, 'page turn rebuilt the reader instead of patching it')
+
+  // the pen: turning it on makes the surface accept pointer events
+  const drawBtn = doc.querySelector('.rbtn.draw')
+  drawBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(120)
+  assert.ok(doc.querySelector('.page-view.ink-on'), 'pen toggle did not arm the ink surface')
+  drawBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(120)
+  assert.ok(!doc.querySelector('.page-view.ink-on'), 'pen toggle did not disarm the ink surface')
+
+  // search inside the book (BM25 over the real pages)
+  const cercaTab = Array.from(doc.querySelectorAll('.side-tab')).find((t) => (t.textContent ?? '').trim() === 'Cerca')
+  assert.ok(cercaTab, 'reader side pane has no search tab')
+  cercaTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(200)
+  const search = doc.querySelector('.side-search')
+  assert.ok(search, 'search tab did not render its input')
+  search.value = 'quoziente'
+  search.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await tick(600)
+  const hits = Array.from(doc.querySelectorAll('.hit')).map((n) => (n.textContent ?? ''))
+  assert.ok(hits.length >= 1, `no hits for a word that is in the book: ${JSON.stringify(hits)}`)
+  assert.ok(hits.some((h) => h.includes('2')), 'the hit should point at page 2, where the quotient rule lives')
+  doc.querySelectorAll('.hit')[0]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(300)
+  assert.equal(doc.querySelector('.page-jump')?.value, '2', 'clicking a search hit did not jump the page')
+
+  // the AI tab has to survive Ollama being absent (jsdom: no server at all)
+  const tabs = Array.from(doc.querySelectorAll('.side-tab'))
+  const aiTab = tabs.find((t) => (t.textContent ?? '').trim() === 'AI')
+  aiTab?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(600)
+  assert.ok(doc.querySelector('.ai-state'), 'AI panel did not render its status line')
+  const askBtn = Array.from(doc.querySelectorAll('.ai-body .btn')).find((b) => /Chiedi/.test(b.textContent ?? ''))
+  const aiText = doc.querySelector('.ai-ask')
+  aiText.value = 'cos\' e la derivata?'
+  askBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(900)
+  const msg = doc.querySelector('.ai-msg.ai')
+  assert.ok(msg, 'asking without a local model produced no answer at all')
+  assert.ok((msg.textContent ?? '').length > 20, 'the no-model fallback should still quote the book')
+  assert.ok(doc.querySelector('.ai-msg.ai a.cite, .ai-msg.ai .ai-mode'), 'fallback answer lost its citations/mode note')
+
+  // handwriting straight from the editor, through a page block
+  await openImportProbe()
+  async function openImportProbe() {
+    const { openImport } = window.__notesTest
+    await openImport([])
+    await tick(200)
+    assert.ok(doc.querySelector('.import-modal .drop'), 'import dialog did not mount its drop zone')
+    doc.querySelector('.scrim')?.remove()
+  }
+
   console.log(
     `  ok   smoke: shell + tabs + sidebar + dashboard + editor render ` +
       `(${vault.subjects.length} subjects, ${vault.notes.length} notes, ${rows.length} blocks in the last note, ` +

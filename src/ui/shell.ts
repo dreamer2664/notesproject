@@ -105,6 +105,10 @@ function buildDataFoot(foot: HTMLElement) {
 export const routeTitle = (route: Route) =>
   route.view === 'library'
     ? 'Link library · Notes'
+    : route.view === 'books'
+      ? 'Testi · Notes'
+      : route.view === 'book'
+        ? `${App.bookById.get(route.bookId)?.title ?? 'Libro'} · Notes`
     : route.view === 'all'
       ? 'Notes'
       : `${'subjectId' in route ? App.subjectById.get(route.subjectId)?.name ?? '' : ''} · Notes`

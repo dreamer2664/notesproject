@@ -2,6 +2,8 @@ import type { Block, Note } from '../core/types'
 import { uid, safeUrl, debounce, sanitizeHtml, stripToInline, escapeHtml } from '../core/util'
 import { defaultLabelForUrl, fileToImageSrc, linkInfo } from '../core/fs'
 import { icons } from '../ui/icons'
+import { mountInk, PALETTE, type InkApi } from '../core/ink'
+import { getBook, getPage, listBooks } from '../core/db'
 import { modal, toast } from '../ui/dom'
 
 /* ------------------------------------------------------------------ menus */
@@ -31,6 +33,8 @@ const SLASH: SlashItem[] = [
   { key: 'code', label: 'Code', hint: 'Monospaced, no auto-format', glyph: '</>', kind: 'turn', type: 'code', search: 'code snippet mono' },
   { key: 'divider', label: 'Divider', hint: 'A thin line', glyph: '—', kind: 'insert', type: 'divider', search: 'divider line hr separator' },
   { key: 'image', label: 'Image', hint: 'Paste, drop or pick a file', glyph: '🖼', kind: 'insert', type: 'image', needs: 'file', search: 'image picture screenshot photo' },
+  { key: 'ink', label: 'Handwriting', hint: 'Draw with a pen or the mouse', glyph: '✍️', kind: 'turn', type: 'ink', search: 'ink pen draw handwriting scribble sketch disegnare penna' },
+  { key: 'page', label: 'Textbook page', hint: 'A live page from an imported book', glyph: '📖', kind: 'insert', type: 'page', needs: 'url', search: 'page book textbook libro pagina pdf epub quote' },
   { key: 'link', label: 'Link to video / article', hint: 'Card with type, note and player', glyph: '🔗', kind: 'insert', type: 'link', needs: 'url', search: 'link url video article reference embed youtube' },
   { key: 'video', label: 'Video link', hint: 'Same, tagged as video', glyph: '▶', kind: 'insert', type: 'link', needs: 'url', search: 'video youtube lecture film' },
 ]
@@ -179,6 +183,8 @@ export function mountEditor(host: HTMLElement, note: Note, onSave: (blocks: Bloc
 
   function bodyFor(b: Block): HTMLElement {
     if (b.type === 'divider') return el2('div', { class: 'b-divider' })
+    if (b.type === 'ink') return inkBody(b)
+    if (b.type === 'page') return pageBody(b)
     if (b.type === 'image') return imageBody(b)
     if (b.type === 'link') return linkBody(b)
     if (b.type === 'code') {
@@ -227,6 +233,163 @@ export function mountEditor(host: HTMLElement, note: Note, onSave: (blocks: Bloc
   }
 
   /* --------------------------------------------------------- image + link */
+
+  /** Handwriting: vector ink, so it stays crisp on any screen and exports as SVG. */
+  function inkBody(b: Block): HTMLElement {
+    const wrap = el2('div', { class: 'b-ink' })
+    const stage = el2('div', { class: 'ink-stage' })
+    const bar = el2('div', { class: 'ink-block-bar' })
+    const api: { current: InkApi | null } = { current: null }
+    const toolBtn = (label: string, title: string, fn: () => void, cls = '') =>
+      el2('button', { class: `ink-mini ${cls}`, type: 'button', title, text: label, onclick: fn })
+    bar.append(
+      toolBtn('Penna', 'Penna', () => api.current?.setTool('pen')),
+      toolBtn('Evidenzia', 'Evidenziatore', () => api.current?.setTool('highlight')),
+      toolBtn('Gomma', 'Gomma', () => api.current?.setTool('eraser')),
+      toolBtn('Annulla', 'Togli ultimo tratto', () => api.current?.undo()),
+      toolBtn('Pulisci', 'Cancella tutto', () => {
+        api.current?.clear()
+        b.strokes = []
+        commit()
+      }),
+    )
+    const done = toolBtn('Fatto', 'Smetti di disegnare', () => {
+      const strokes = api.current?.getStrokes() ?? []
+      b.strokes = strokes
+      wrap.classList.remove('editing')
+      api.current?.setEnabled(false)
+      commit()
+    })
+    done.classList.add('on')
+    bar.append(done)
+    wrap.append(el2('div', { class: 'ink-hint' }, el2('span', { text: 'Scrivi qui con la penna (o col mouse). Le linee restano nitide a ogni zoom.' })))
+    wrap.append(stage, bar)
+    api.current = mountInk(stage, {
+      strokes: b.strokes ?? [],
+      noToolbar: true,
+      onChange: (strokes) => {
+        b.strokes = strokes
+        scheduleSave()
+        wrap.classList.toggle('has-ink', strokes.length > 0)
+      },
+    })
+    const start = () => {
+      wrap.classList.add('editing')
+      api.current?.setEnabled(true)
+    }
+    wrap.addEventListener('pointerdown', (e: Event) => {
+      const t = e.target as HTMLElement
+      if (bar.contains(t)) return
+      if (!wrap.classList.contains('editing')) start()
+    })
+    for (const c of PALETTE) {
+      bar.append(
+        el2('button', {
+          class: 'ink-sw',
+          type: 'button',
+          title: c.name,
+          style: { ['--sw' as string]: c.c },
+          onclick: () => {
+            api.current?.setColor(c.c)
+            if (c.c === '#ffd43b') api.current?.setTool('highlight')
+          },
+        }),
+      )
+    }
+    return wrap
+  }
+
+  /** A live window on an imported textbook: page image + its ink, click to open the reader. */
+  function pageBody(b: Block): HTMLElement {
+    const card = el2('div', { class: 'b-page', dataset: { id: b.id } })
+    card.append(el2('div', { class: 'page-loading', text: 'Caricamento pagina…' }))
+    void (async () => {
+      card.replaceChildren()
+      if (!b.bookId || !b.pageNumber) {
+        card.append(el2('button', { class: 'page-pick', type: 'button', text: 'Scegli libro e pagina', onclick: () => void pickPage(b, card) }))
+        return
+      }
+      const [book, page] = await Promise.all([getBook(b.bookId), getPage(b.bookId, b.pageNumber!)])
+      if (!book || !page) {
+        card.append(el2('p', { class: 'page-missing', text: 'Pagina non trovata nel archivio. ' }))
+        card.append(el2('button', { class: 'link-btn', type: 'button', text: 'Scegli di nuovo', onclick: () => void pickPage(b, card) }))
+        return
+      }
+      const head = el2('div', { class: 'page-head' }, el2('span', { class: 'page-ref', text: `${book.title} · p. ${page.n}` }))
+      head.append(
+        el2('button', { class: 'mini', type: 'button', title: 'Apri nel lettore', html: icons.external, onclick: () => (location.hash = `#/b/${book.id}?p=${page.n}`) }),
+        el2('button', {
+          class: 'mini',
+          type: 'button',
+          title: 'Aggiorna da libro',
+          html: icons.refresh,
+          onclick: async () => {
+            const fresh = await getPage(book.id, b.pageNumber!)
+            if (fresh) {
+              b.ink = fresh.ink
+              void commit()
+              toast('Pagina aggiornata')
+            }
+          },
+        }),
+      )
+      const stage = el2('div', { class: 'page-stage' })
+      if (page.image) stage.append(el2('img', { src: page.image, alt: `pagina ${page.n}`, loading: 'lazy' }))
+      else stage.append(el2('pre', { class: 'page-text', text: (page.text || 'Nessun testo su questa pagina.').slice(0, 1400) }))
+      const ink = mountInk(stage, { strokes: b.ink ?? page.ink ?? [], enabled: false, noToolbar: true, onChange: (strokes) => { b.ink = strokes; scheduleSave() } })
+      const tools = el2('div', { class: 'page-tools' })
+      let on = false
+      tools.append(
+        el2('button', {
+          class: 'mini',
+          type: 'button',
+          title: 'Scrivi sulla pagina',
+          html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 20l3.5-.8L20 6.7a2.1 2.1 0 0 0-3-3L4.5 16.2 4 20z"/></svg>',
+          onclick: (e: Event) => {
+            e.stopPropagation()
+            on = !on
+            ink.setEnabled(on)
+            ;(e.currentTarget as HTMLElement).classList.toggle('on', on)
+          },
+        }),
+        el2('button', { class: 'mini', type: 'button', title: 'Annulla tratto', html: icons.history, onclick: () => ink.undo() }),
+      )
+      card.append(head, stage, tools)
+      if (page.text.trim()) card.append(el2('p', { class: 'page-snippet', text: page.text.trim().slice(0, 240) }))
+    })()
+    return card
+  }
+
+  async function pickPage(b: Block, card: HTMLElement) {
+    const books = await listBooks()
+    if (!books.length) {
+      toast('Importa prima un libro: ⌘K → Importa libro')
+      return
+    }
+    const res = await modal({
+      title: 'Inserisci una pagina del libro',
+      fields: [
+        { name: 'book', label: 'Libro', list: 'book-list', placeholder: books[0]!.title },
+        { name: 'page', label: 'Pagina', placeholder: 'es. 128', type: 'number' },
+      ],
+      datalist: [{ id: 'book-list', options: books.map((x) => x.title) }],
+      actions: [
+        { label: 'Annulla', kind: 'ghost', value: '' },
+        { label: 'Inserisci', kind: 'primary', value: 'ok' },
+      ],
+    })
+    if (!res) return
+    const chosen = (card.closest('.brow')?.querySelector<HTMLInputElement>('[data-field="book"]')?.value ?? res.book ?? '').trim()
+    const book =
+      books.find((x) => x.title === chosen) ??
+      books.find((x) => chosen.toLowerCase().includes(x.title.toLowerCase())) ??
+      books.find((x) => x.title.toLowerCase().includes(chosen.toLowerCase())) ??
+      books[0]!
+    b.bookId = book.id
+    b.pageNumber = Math.max(1, Math.min(book.pageCount, Number(res.page) || 1))
+    commit()
+    void card
+  }
 
   function imageBody(b: Block): HTMLElement {
     const wrap = el2('figure', { class: 'b-image' })
@@ -521,7 +684,7 @@ export function mountEditor(host: HTMLElement, note: Note, onSave: (blocks: Bloc
       if (!b) continue
       const content = row.querySelector<HTMLElement>('[contenteditable="true"]')
       if (b.type === 'code') b.content = content?.innerText ?? ''
-      else if (b.type !== 'divider' && b.type !== 'image' && b.type !== 'link') {
+      else if (b.type !== 'divider' && b.type !== 'image' && b.type !== 'link' && b.type !== 'ink' && b.type !== 'page') {
         b.content = sanitizeHtml(content?.innerHTML ?? '')
       }
     }
@@ -551,6 +714,10 @@ export function mountEditor(host: HTMLElement, note: Note, onSave: (blocks: Bloc
       ['starred', b.starred ? true : undefined],
       ['read', b.read ? true : undefined],
       ['embed', b.embed ? true : undefined],
+      ['strokes', b.strokes?.length ? b.strokes : undefined],
+      ['ink', b.ink?.length ? b.ink : undefined],
+      ['bookId', b.bookId || undefined],
+      ['pageNumber', b.pageNumber || undefined],
       ['addedAt', b.addedAt || undefined],
     ]
     for (const [k, v] of keep) if (v !== undefined) out[k] = v
@@ -654,7 +821,7 @@ export function mountEditor(host: HTMLElement, note: Note, onSave: (blocks: Bloc
       const idx = blocks.findIndex((x) => x.id === id)
       if (idx <= 0) return
       const prev = blocks[idx - 1]!
-      if (prev.type === 'divider' || prev.type === 'image' || prev.type === 'link') {
+      if (prev.type === 'divider' || prev.type === 'image' || prev.type === 'link' || prev.type === 'ink' || prev.type === 'page') {
         e.preventDefault()
         blocks.splice(idx - 1, 1)
         commit()
@@ -1024,6 +1191,16 @@ export function mountEditor(host: HTMLElement, note: Note, onSave: (blocks: Bloc
     const b = byId.get(id)
     if (!b) return
     closeSlash()
+    if (item.key === 'page') {
+      const empty = b.type === 'text' && !textOf(rows.get(id)!.querySelector('[contenteditable="true"]') as HTMLElement)
+      const fresh = empty ? b : newBlock('page')
+      if (!empty) insertAfter(id, fresh)
+      else fresh.type = 'page'
+      commit()
+      const card = rows.get(fresh.id)?.querySelector('.b-page')
+      if (card) await pickPage(fresh, card as HTMLElement)
+      return
+    }
     if (item.key === 'link' || item.key === 'video') {
       const res = await askLink(item.key === 'video' ? 'video' : undefined)
       if (!res) {
