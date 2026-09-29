@@ -8,6 +8,9 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
+Full terminal / PowerShell walkthrough — installing Git + Node, cloning, `git pull` after an update,
+the Ollama models, firewall/phone access, what `git pull` can't break — is in [`GIT.md`](GIT.md).
+
 Other commands: `npm run build` (typecheck + production bundle), `npm test` (51 unit tests + a jsdom smoke test that boots the real app — reader, pen, scan dialog, a stored scan turned into real blocks, study worker, and all), `npm run typecheck`.
 
 ---
