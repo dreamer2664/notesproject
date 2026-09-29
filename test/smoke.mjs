@@ -284,6 +284,53 @@ const run = async () => {
   assert.equal(offline.videos.length, 0, 'no links when the web step is off')
   console.log('  ok   scan: three dials, web off by default, honest failure with no model')
 
+  /* a finished run, re-opened from the DB, must render as cards/links/blocks */
+  const { putScanRun, listScanRuns } = window.__notesTest
+  await putScanRun({
+    id: 'smoke-run', at: Date.now(), effort: 'standard', imageCount: 2, usedVision: true, minutes: 4,
+    notes: '# Limite di una funzione\n\nDefinizione con epsilon e delta.\n\n> [!NOTE] Il valore in x0 non conta.\n\n- **continuita**: limite = valore\n- [ ] rifare gli esercizi 12-18',
+    flashcards: 'DOMANDA: Perche f e continua in x0?\nRISPOSTA: perche il limite esiste e coincide con f(x0).',
+    extras: '### Errori tipici\n- confondere continuo con derivabile',
+    transcript: ['LIMIT DI UNA FUNZIONE', 'CONTINUITA'],
+    videos: [{ title: 'teorema degli zeri analisi', url: 'https://www.youtube.com/results?search_query=teorema%20degli%20zeri%20analisi' }],
+  })
+  doc.querySelector('.scrim.scan-scrim')?.remove()
+  await openScanDialog([])
+  await tick(300)
+  const runRow = doc.querySelector('.run-row .run-main')
+  assert.ok(runRow, 'a saved scan run is not listed for re-opening')
+  runRow.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(120)
+  assert.ok(doc.querySelector('.scan-notes h4'), `re-opened notes did not render as markdown: ${JSON.stringify(doc.querySelector('.scan-notes')?.innerHTML?.slice(0, 120))}`)
+  assert.ok(doc.querySelector('.card-fc b'), 'flashcards did not render as cards')
+  const vlink = doc.querySelector('.scan-videos a.video-row')
+  assert.ok(vlink, 'no YouTube row')
+  assert.equal(vlink.getAttribute('rel'), 'noopener noreferrer', 'video link must not leak the referrer')
+  assert.match(vlink.getAttribute('href'), /^https:\/\/www\.youtube\.com\/results\?search_query=/, 'link is not a plain search URL')
+  assert.ok(doc.querySelector('.scan-part textarea.paste-area'), 'the transcript is not editable')
+  const createBtn = Array.from(doc.querySelectorAll('.scan-modal .btn')).find((b) => /Crea appunto con tutto/.test(b.textContent ?? ''))
+  assert.ok(createBtn, 'no button to turn a scan into a note')
+  createBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(700)
+  const vault3 = await window.__notesTest.exportVault()
+  const allNotes = vault3.notes
+  const scanNote = allNotes.find((n) => (n.blocks ?? []).some((b) => /epsilon e delta/.test(b.content ?? '')))
+  assert.ok(scanNote, `no note was created from the scan (${allNotes.length} notes, titles: ${allNotes.map((n) => n.title).join(' | ')})`)
+  assert.ok(scanNote, 'the scan did not create a note')
+  const types = scanNote.blocks.map((b) => b.type)
+  assert.ok(types.includes('h1'), `no heading from the first line: ${types.join(',')}`)
+  assert.ok(types.includes('callout'), `the "[!NOTE]" line did not become a callout: ${types.join(',')}`)
+  assert.ok(types.includes('todo'), `the "- [ ]" line did not become a checkbox: ${types.join(',')}`)
+  const toggles = scanNote.blocks.filter((b) => b.type === 'toggle')
+  assert.equal(toggles.length, 1, `flashcards became ${toggles.length} toggles, expected 1`)
+  assert.ok(toggles[0].collapsed, 'flashcard toggles should start collapsed')
+  const answer = scanNote.blocks.find((b) => b.indent === 1)
+  assert.ok(answer && /limite esiste/.test(answer.content || ''), `the answer did not land under its question: ${JSON.stringify(scanNote.blocks.slice(-4))}`)
+  assert.ok(!scanNote.blocks.some((b) => b.type === 'toggle' && /RISPOSTA/.test(b.content || '')), 'a RISPOSTA opened a second card')
+  assert.ok(scanNote.blocks.some((b) => b.type === 'link' && /youtube\.com\/results/.test(b.url || '')), 'the video did not become a link block')
+  assert.match(scanNote.blocks.find((b) => b.type === 'callout').content, /^💡 /, 'callout lost its marker')
+  console.log('  ok   scan: a stored run re-renders, and becomes a note with real blocks')
+
   const linkNotes = vault.notes.filter((n) => n.blocks.some((b) => b.type === 'link')).length
 
   /* ------------------------------------------------ books, reader, pen, AI */

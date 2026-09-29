@@ -134,3 +134,16 @@ export function mark(text: string, query: string): string {
     escapeHtml(text.slice(i + query.length))
   )
 }
+
+/**
+ * Which `Event` class to build depends on who is listening: a DOM node wants the
+ * window's Event, while jsdom's plain `new EventTarget()` is Node's own and rejects
+ * DOM events (and vice versa). Picking the constructor from the target keeps
+ * App.emit() working in the browser and under the smoke test.
+ */
+export function domEvent(type: string, target?: EventTarget): Event {
+  const g = globalThis as unknown as { window?: { Event?: typeof Event }; Event?: typeof Event }
+  const owner = (target?.constructor as unknown as { Event?: typeof Event } | undefined) ?? undefined
+  const Ctor = owner?.Event ?? g.window?.Event ?? g.Event
+  return Ctor ? new Ctor(type) : ({ type } as Event)
+}

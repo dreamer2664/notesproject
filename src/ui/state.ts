@@ -1,3 +1,4 @@
+import { domEvent } from '../core/util'
 import type { Book, Note, Subject, Topic } from '../core/types'
 
 export type Route =
@@ -19,15 +20,18 @@ export const routes = {
   book: (id: string, page?: number) => `#/b/${id}${page ? `?p=${page}` : ''}`,
 }
 
+/** `location` is missing when these modules are imported from a plain node test. */
+const hash = () => (globalThis as unknown as { location?: { hash: string } }).location?.hash ?? ''
+
 export function parseHash(): Route {
-  const h = location.hash.replace(/^#\/?/, '')
+  const h = hash().replace(/^#\/?/, '')
   const p = h.split('/').filter(Boolean)
   if (!p.length) return { view: 'all' }
   if (p[0] === 'library') return { view: 'library', filter: p[1] }
   if (p[0] === 'books') return { view: 'books' }
   if (p[0] === 'b' && p[1]) {
     const id = p[1].split('?')[0]!
-    const page = Number(location.hash.match(/[?&]p=(\d+)/)?.[1] ?? 1)
+    const page = Number(hash().match(/[?&]p=(\d+)/)?.[1] ?? 1)
     return { view: 'book', bookId: id, page: Number.isFinite(page) && page > 0 ? page : 1 }
   }
   if (p[0] === 's' && p[1]) {
@@ -41,17 +45,24 @@ export function parseHash(): Route {
 }
 
 /** Navigate. Same-hash navigations are announced manually, since the browser stays quiet. */
-export const go = (hash: string) => {
-  if (location.hash === hash) document.dispatchEvent(new Event('data'))
-  else location.hash = hash
+export const go = (next: string) => {
+  const loc = (globalThis as unknown as { location?: { hash: string } }).location
+  if (!loc) return
+  if (loc.hash === next) document.dispatchEvent(domEvent('data', document))
+  else loc.hash = next
 }
 
 /**
  * Tiny global store. The editor owns its own DOM while you type, so data
  * changes are announced with an event instead of a re-render cascade.
  */
+/** jsdom hands the harness Node's `EventTarget` on the global but its own in `window`;
+ *  a bus and its events must come from the same realm or `dispatchEvent` refuses them. */
+const BusCtor: typeof EventTarget =
+  (globalThis as unknown as { window?: { EventTarget?: typeof EventTarget } }).window?.EventTarget ?? EventTarget
+
 class AppStore {
-  readonly bus = new EventTarget()
+  readonly bus = new BusCtor()
   route: Route = parseHash()
   subjects: Subject[] = []
   /** memoised for breadcrumbs / tab titles */
@@ -64,7 +75,7 @@ class AppStore {
   paletteOpen = false
 
   emit() {
-    this.bus.dispatchEvent(new Event('data'))
+    this.bus.dispatchEvent(domEvent('data', this.bus))
   }
 
   onChange(fn: () => void) {

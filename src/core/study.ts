@@ -121,8 +121,6 @@ export function onStudyChange(fn: Listener) {
 const emit = (patch: Partial<StudyState>) => {
   state = { ...state, ...patch }
   for (const l of listeners) l(state)
-  // the reader's strip listens on this too, and it lives in the UI bundle
-  ;(window as unknown as { __studyBus?: EventTarget }).__studyBus?.dispatchEvent(new Event('data'))
 }
 
 let aheadDone = 0

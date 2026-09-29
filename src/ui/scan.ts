@@ -1,5 +1,5 @@
 import { createNote, createTopic, deleteScanRun, digestCount, digestFor, getBook, getNote, listScanRuns, listTopics, putScanRun, saveBlocks } from '../core/db'
-import { dropDigests, stopStudy, studyBook, studyState } from '../core/study'
+import { dropDigests, onStudyChange, stopStudy, studyBook, studyState } from '../core/study'
 import { uid } from '../core/util'
 import type { Block } from '../core/types'
 import {
@@ -9,8 +9,6 @@ import {
   prepareForScan,
   runScan,
   sanitiseQuery,
-  shouldEnrich,
-  ytSearchUrl,
   type Effort,
   type ScanResult,
 } from '../core/screenshot'
@@ -305,7 +303,7 @@ export async function openScanDialog(preselect?: File[]) {
     notes.innerHTML = mdToHtml(res.notes || '_(nessun appunto prodotto)_')
     out.append(notes)
     if (res.extras?.trim()) {
-      const ex = el('details', { class: 'scan-part' }, el('summary', { text: `In più, perché c’era tempo (${res.elapsedMs < minutes * 60000 ? 'budget non finito' : 'budget finito'})` }))
+      const ex = el('details', { class: 'scan-part' }, el('summary', { text: `In più, perché c’era tempo${minutes > 0 ? ` (${res.elapsedMs < minutes * 60000 ? `budget di ${minutes} min non finito` : 'budget finito'})` : ''}` }))
       const box = el('div', { class: 'ai-msg ai' })
       box.innerHTML = mdToHtml(res.extras)
       ex.append(box)
@@ -398,32 +396,29 @@ export async function openScanDialog(preselect?: File[]) {
     const blocks: Block[] = []
     const today = new Date().toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })
     blocks.push({ id: uid('b'), type: 'text', content: `<i>${res.imageCount} immagini · ${res.usedVision ? 'lette dal modello' : 'OCR locale'} · ${EFFORT[effort].label} · ${today}</i>` })
-    for (const line of res.notes.split('\n')) {
-      const t = line.trim()
-      if (!t) continue
-      const h = t.match(/^(#{1,3})\s+(.*)$/)
-      if (h) blocks.push({ id: uid('b'), type: `h${h[1]!.length}` as Block['type'], content: h[2]! })
-      else if (/^[-*•]\s+\[[ xX]\]\s+/.test(t)) blocks.push({ id: uid('b'), type: 'todo', content: t.replace(/^[-*•]\s+\[[ xX]\]\s+/, ''), checked: /\[x\]/i.test(t) })
-      else if (/^[-*•]\s+/.test(t)) blocks.push({ id: uid('b'), type: 'bulleted', content: t.replace(/^[-*•]\s+/, '') })
-      else if (/^\d+[.)]\s+/.test(t)) blocks.push({ id: uid('b'), type: 'numbered', content: t.replace(/^\d+[.)]\s+/, '') })
-      else if (t.startsWith('>')) blocks.push({ id: uid('b'), type: 'quote', content: t.replace(/^>\s?/, '') })
-      else blocks.push({ id: uid('b'), type: 'text', content: t })
-    }
+    blocks.push(...blockify(res.notes))
     if (res.flashcards.trim()) {
       blocks.push({ id: uid('b'), type: 'h2', content: 'Flashcard' })
+      let open: Block | null = null
       for (const line of res.flashcards.split('\n')) {
         const q = line.match(/^\s*DOMANDA\s*[:]\s*(.+)$/i)
         const a = line.match(/^\s*RISPOSTA\s*[:]\s*(.+)$/i)
-        if (q) blocks.push({ id: uid('b'), type: 'toggle', content: q[1]!, collapsed: true })
-        else if (a) blocks.push({ id: uid('b'), type: 'text', content: a[1]!, indent: 1 })
+        if (q) {
+          if (open) { blocks.push(open); blocks.push({ id: uid('b'), type: 'text', content: '', indent: 1 }) }
+          open = { id: uid('b'), type: 'toggle', content: q[1]!, collapsed: true }
+        } else if (a && open) {
+          blocks.push(open)
+          blocks.push({ id: uid('b'), type: 'text', content: a[1]!, indent: 1 })
+          open = null
+        } else if (open && line.trim()) {
+          open.content += ' ' + line.trim()
+        }
       }
+      if (open) blocks.push(open)
     }
     if (res.extras.trim()) {
       blocks.push({ id: uid('b'), type: 'h2', content: 'In più (perché c’era tempo)' })
-      for (const line of res.extras.split('\n')) {
-        if (!line.trim()) continue
-        blocks.push(/^[-*•]\s+/.test(line) ? { id: uid('b'), type: 'bulleted', content: line.replace(/^[-*•]\s+/, '') } : { id: uid('b'), type: 'text', content: line.trim() })
-      }
+      blocks.push(...blockify(res.extras, { plus: 1 }))
     }
     if (res.videos.length) {
       blocks.push({ id: uid('b'), type: 'h2', content: 'Video da guardare' })
@@ -443,19 +438,16 @@ export async function openScanDialog(preselect?: File[]) {
     if (!note) return
     const blocks = [...note.blocks]
     blocks.push({ id: uid('b'), type: 'divider', content: '' })
-    for (const line of res.notes.split('\n')) {
-      if (!line.trim()) continue
-      const h = line.match(/^(#{1,3})\s+(.*)$/)
-      blocks.push(h ? { id: uid('b'), type: `h${Math.min(3, h[1]!.length + 1)}` as Block['type'], content: h[2]! } : { id: uid('b'), type: /^[-*•]\s+/.test(line) ? 'bulleted' : 'text', content: line.replace(/^[-*•]\s+/, '').trim() })
-    }
+    blocks.push(...blockify([res.notes, res.flashcards ? `## Flashcard\n${res.flashcards}` : '', res.extras ? `## In più\n${res.extras}` : ''].filter(Boolean).join('\n\n'), { plus: 1 }))
     await saveBlocks(noteId, blocks)
     App.emit()
     toast('Aggiunti all’appunto aperto')
   }
 
   async function guessTitle(notes: string) {
-    const first = notes.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('#')) ?? 'Appunti da screenshot'
-    const fallback = first.replace(/[#*_>`]/g, '').replace(/\s+/g, ' ').slice(0, 60)
+    const lines = notes.split('\n').map((l) => l.trim()).filter(Boolean)
+    const first = lines.find((l) => l.startsWith('#')) ?? lines[0] ?? 'Appunti da screenshot'
+    const fallback = first.replace(/[#*_>`]/g, '').replace(/^\d+[.)]\s*/, '').replace(/\s+/g, ' ').slice(0, 60)
     const cfg2 = getAiSettings()
     if (!cfg2.model) return fallback
     const res = await chat({
@@ -513,9 +505,66 @@ export async function openScanDialog(preselect?: File[]) {
   document.body.append(scrim)
   if (preselect?.length) void setFiles(preselect)
   if (st.status !== 'ok') log(`⚠ ${st.status === 'cors' ? 'Ollama blocca questa origine: OLLAMA_ORIGINS="*" ollama serve' : 'Ollama non risponde: ollama serve && ollama pull qwen2.5:3b'}`)
-  void shouldEnrich
-  void ytSearchUrl
-  void getBook
+}
+
+/**
+ * Markdown -> real blocks. Deliberately small (no parser, line by line): the model's
+ * output is short and predictable, and the user can fix anything that landed oddly in
+ * the editor. `plus` bumps headings because appended notes sit under the note's title.
+ */
+/** @exported for tests: the markdown -> block mapping is the one thing users notice most. */
+export function blockify(md: string, opts: { plus?: number } = {}): Block[] {
+  const plus = opts.plus ?? 0
+  const out: Block[] = []
+  let code: string[] | null = null
+  for (const raw of md.split('\n')) {
+    const t = raw.trim()
+    if (code) {
+      if (/^```/.test(t)) {
+        out.push({ id: uid('b'), type: 'code', content: code.join('\n') })
+        code = null
+      } else code.push(raw)
+      continue
+    }
+    if (/^```/.test(t)) {
+      code = []
+      continue
+    }
+    if (!t) continue
+    if (t === '---') {
+      out.push({ id: uid('b'), type: 'divider', content: '' })
+      continue
+    }
+    const h = t.match(/^(#{1,3})\s+(.*)$/)
+    if (h) {
+      const lvl = Math.min(3, h[1]!.length + plus)
+      out.push({ id: uid('b'), type: `h${lvl}` as Block['type'], content: h[2]! })
+      continue
+    }
+    const cal = t.match(/^>\s*\[![A-Za-z]+\]\s*(.*)$/)
+    if (cal) {
+      out.push({ id: uid('b'), type: 'callout', content: `💡 ${cal[1]!.trim() || 'Nota'}` })
+      continue
+    }
+    if (t.startsWith('>')) {
+      out.push({ id: uid('b'), type: 'quote', content: t.replace(/^>\s?/, '') })
+      continue
+    }
+    const todo = t.match(/^[-*•]\s+\[[ xX]\]\s+(.*)$/)
+    if (todo) {
+      out.push({ id: uid('b'), type: 'todo', content: todo[1]!, checked: /\[[xX]\]/.test(t) })
+      continue
+    }
+    const li = t.match(/^([-*•]|\d+[.)])\s+(.*)$/)
+    if (li) {
+      const numbered = /^\d/.test(li[1]!)
+      out.push({ id: uid('b'), type: numbered ? 'numbered' : 'bulleted', content: li[2]! })
+      continue
+    }
+    out.push({ id: uid('b'), type: 'text', content: t })
+  }
+  if (code && code.length) out.push({ id: uid('b'), type: 'code', content: code.join('\n') })
+  return out
 }
 
 function renderCards(raw: string) {
@@ -586,7 +635,12 @@ export function studyStrip(bookId: string, page: number, onDone: () => void) {
       ...(n ? [el('button', { class: 'btn small ghost', type: 'button', text: 'pulisci schede', onclick: async () => { await dropDigests(bookId); await refresh() } })] : [])))
   }
   void refresh()
-  const off = (window as unknown as { __studyBus?: EventTarget }).__studyBus
-  off?.addEventListener('data', refresh)
+  // unsubscribe when the reader closes; MutationObserver is not in every environment
+  const off = onStudyChange(() => { void refresh() })
+  const MO = (globalThis as unknown as { MutationObserver?: typeof MutationObserver }).MutationObserver
+  if (MO) {
+    const obs = new MO(() => { if (!wrap.isConnected) { obs.disconnect(); off() } })
+    obs.observe(document.body, { childList: true, subtree: true })
+  }
   return wrap
 }

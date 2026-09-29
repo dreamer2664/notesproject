@@ -15,6 +15,7 @@ import { PALETTE, packPoints, unpackPoints, eraseAt, strokePaths } from '../src/
 import type { InkStroke } from '../src/core/types'
 import { EFFORT, extractQueries, sanitiseQuery, shouldEnrich, splitTranscript, ytSearchUrl, chat } from '../src/core/screenshot'
 import { parseDigest, digestToMd } from '../src/core/study'
+import { blockify } from '../src/ui/scan'
 import type { Block, Note } from '../src/core/types'
 
 function readSource(rel: string): string {
@@ -435,6 +436,44 @@ test('study: a digest renders as markdown with page citations', () => {
   assert.match(md, /\*\*Idee\*\* \(p\. 12\)/)
   assert.match(md, /- b = c/)
   assert.ok(!md.includes('Domande'), 'empty sections must not be printed')
+})
+
+/* ------------------------------------------- scan -> blocks (the UI mapping) */
+test('scan: markdown from the model becomes real blocks, not one blob of text', () => {
+  const md = [
+    '# Limite di una funzione',
+    '',
+    'Definizione con epsilon e delta.',
+    '',
+    '> [!NOTE] Il valore in x0 non conta.',
+    '',
+    '- **continuita**: limite = valore',
+    '1. primo',
+    '2. secondo',
+    '- [x] fatto',
+    '- [ ] da fare',
+    '> citazione',
+    '',
+    '```',
+    'lim x->0 = 1',
+    '```',
+    '',
+    '---',
+  ].join('\n')
+  const bs = blockify(md)
+  assert.deepEqual(bs.map((b) => b.type), ['h1', 'text', 'callout', 'bulleted', 'numbered', 'numbered', 'todo', 'todo', 'quote', 'code', 'divider'])
+  assert.equal(bs[0].content, 'Limite di una funzione')
+  assert.equal(bs[2].content, '\u{1F4A1} Il valore in x0 non conta.', 'callout keeps the marker md.ts looks for')
+  assert.equal(bs[6].checked, true, 'checked box lost its state')
+  assert.equal(bs[7].checked, false)
+  assert.equal(bs[9].content, 'lim x->0 = 1', 'a code fence should become one code block')
+})
+
+test('scan: appended notes sit under the open note (headings bumped, nothing invented)', () => {
+  const bs = blockify('## Titoli\ntesto', { plus: 1 })
+  assert.deepEqual(bs.map((b) => b.type), ['h3', 'text'])
+  assert.equal(bs[0].content, 'Titoli')
+  assert.equal(blockify('   \n\n  ').length, 0, 'blank output stays blank')
 })
 
 /* -------------------------------------------------------------- run them */

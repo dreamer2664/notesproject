@@ -90,15 +90,17 @@ OLLAMA_ORIGINS=* ollama serve
 
 **Il tempo minimo funziona così:** finita la prima stesura, se sei ancora sotto il 60% del budget l’app chiede al modello *"cosa renderebbe lo studio di questa roba davvero più facile?"* e glielo fa avere: schema a albero, tabella di confronto, errori tipici, glossario, piano di ripasso in 3 giorni, altre flashcard. Se sei oltre, si ferma da sola: su un PC vecchio non ti fa aspettare per niente. Mettendo un minimo **senza** spuntare "auto", invece, il tempo se lo prende tutto.
 
-**JUST FROM THE SCREENSHOTS:** è scritto nel motore, ed è testato (`npm run test:unit` → *scan: nothing in the writing prompts can reach the web*): i prompt che producono gli appunti contengono solo testo trascritto dalle tue immagini e nessun URL; ogni richiesta esce solo se l’endpoint è `localhost`/`127.0.0.1`, altrimenti **refusa prima di chiamare fetch**. Se il modello non ha nulla da leggere, non inventa: ti dice che dall’immagine non è uscito testo.
+**JUST FROM THE SCREENSHOTS:** è scritto nel motore, ed è testato (`npm run test:unit` → *scan: nothing in the writing prompts can reach the web*; e lo smoke test verifica che il link YouTube nella finestra ha `rel="noopener noreferrer"` e che il blocco nell'appunto punta solo a `youtube.com/results?search_query=`): i prompt che producono gli appunti contengono solo testo trascritto dalle tue immagini e nessun URL; ogni richiesta esce solo se l’endpoint è `localhost`/`127.0.0.1`, altrimenti **refusa prima di chiamare fetch**. Se il modello non ha nulla da leggere, non inventa: ti dice che dall’immagine non è uscito testo.
 
 **YouTube, alla fine, se vuoi.** La casella *"cerca su YouTube SOLO il link"* è **spenta di default** e vale solo per Standard/Profondo. Se la accendi: il modello produce al massimo 4 frasi di ricerca (`YT: teorema di Taylor`), l’app le filtra (niente URL, niente siti, niente markup: una riga che non è una frase di ricerca viene buttata via) e ti mette davanti link alla **pagina di ricerca** di YouTube. L’app non apre nessun video, non legge nessuna pagina, non manda nessuna parola dei tuoi appunti a nessuno: apri tu, decidi tu.
 
 **Cosa ne esce**
-- appunti Markdown già nel formato giusto, con la trascrizione sotto (la puoi correggere e premere *Rigenera*: riscrive senza rileggere le immagini);
-- flashcard → diventano blocchi `toggle` (domanda chiusa, risposta dentro): perfette per ripassare sull’appunto;
-- le "cose in più" → un paragrafo separato, così lo butti via se non ti serve;
-- **Crea appunto con tutto** (📸 in un topic "Screenshot"), oppure **Copia in fondo all’appunto aperto**.
+- gli appunti non arrivano come un muro di testo: diventano **blocchi veri** — titoli, `> [!NOTE]` che diventano callout, `- [ ]` che diventano check-list, elenchi numerati, ```blocchi di codice``` (formule, pseudocodice), divider. E sono modificabili, ovviamente;
+- flashcard → **una sola scheda per domanda**: la domanda è l'intestazione di un `toggle` chiuso, la risposta sta dentro (una domanda da 4 righe fa 1 scheda, non 4). Perfette per ripassare sull'appunto senza andare in un'altra app;
+- le "cose in più" → paragrafo separato (`## In più`), così lo butti via se non ti serve;
+- i video (se li hai chiesti) → blocchi link veri, cliccabili, con "ricerca automatica su YouTube" come nota;
+- **Crea appunto con tutto** (📸 in un topic "Screenshot"), oppure **Copia in fondo all'appunto aperto**: in quel caso i titoli scendono di un livello, così stanno sotto l'intestazione dell'appunto invece di litigarci;
+- la trascrizione sta sotto, apribile: la correggi e premi *Rigenera* (riscrive gli appunti da quel testo, senza rileggere le immagini).
 
 Le immagini **non vengono salvate** nell’archivio (trenta PNG a 1300px brucerebbero il DB in un pomeriggio): restano la trascrizione e gli appunti, e la trascrizione è testo, quindi si cerca. Lo storico delle scansioni (testo, non immagini) è nella parte bassa della finestra: lo riapri se il browser è crashato a metà.
 

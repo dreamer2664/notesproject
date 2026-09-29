@@ -8,7 +8,7 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Other commands: `npm run build` (typecheck + production bundle), `npm test` (49 unit tests + a jsdom smoke test that boots the real app — reader, pen, scan dialog, study worker, and all), `npm run typecheck`.
+Other commands: `npm run build` (typecheck + production bundle), `npm test` (51 unit tests + a jsdom smoke test that boots the real app — reader, pen, scan dialog, a stored scan turned into real blocks, study worker, and all), `npm run typecheck`.
 
 ---
 
@@ -26,7 +26,7 @@ Other commands: `npm run build` (typecheck + production bundle), `npm test` (49 
 
 **Textbooks are a first-class content type.** `Ctrl+Shift+B` opens the import dialog: drop an EPUB (the one Adobe Digital Editions / laZ / "libro liquido" hand you), a PDF, or a folder of page images. Pages become image + text, with **local OCR** (Italian model vendored inside the app, so it works with the wifi off). The reader is split-screen — page on the left, `Testo / Appunti / AI / Cerca` on the right — and `p` gives you a pen that writes on the page itself. See [`docs/LIBRI-AI-PENNA.md`](docs/LIBRI-AI-PENNA.md) (Italian) for the per-publisher how-to.
 
-**Screenshots in, notes out.** `Ctrl+Shift+S`: drop thirty screenshots of pages/slides, pick how hard the local model should think (Veloce / Standard / Profondo — it really changes image count, passes and token budget), set a minimum time. Finished early? The leftover time goes into *"what would make studying this easier"* (schemas, comparison tables, extra flashcards) until 60% of your budget, then it stops. Notes are built **only** from what was read off your images — the prompts carry no URL, and any non-local endpoint is refused before a request is made (there is a test for that). Optional, off-by-default last step: up to 4 `YT:` search phrases become plain YouTube *search* links — nothing is fetched, nothing is read.
+**Screenshots in, notes out.** `Ctrl+Shift+S`: drop thirty screenshots of pages/slides, pick how hard the local model should think (Veloce / Standard / Profondo — it really changes image count, passes and token budget), set a minimum time. Finished early? The leftover time goes into *"what would make studying this easier"* (schemas, comparison tables, extra flashcards) until 60% of your budget, then it stops. Notes are built **only** from what was read off your images — the prompts carry no URL, and any non-local endpoint is refused before a request is made (there is a test for that). Optional, off-by-default last step: up to 4 `YT:` search phrases become plain YouTube *search* links (`rel="noopener noreferrer"`, never opened) — nothing is fetched, nothing is read. What you get back is real blocks, not a wall of text: callouts, checkboxes, numbered lists, code fences, and one collapsed toggle per flashcard.
 
 **AI with no key, no cloud, no bill.** The AI tab talks to **Ollama on your own machine** (`127.0.0.1:11434`) — no API key, no account, nothing leaves the PC. Retrieval is done in-app (BM25 over the book, Italian stemmer), so the model gets the pages that actually matter, with page numbers that are clickable in the answer. No model installed? The tab still answers honestly by quoting the book.
 
