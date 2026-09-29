@@ -3,6 +3,7 @@ import { listAllNotes, listAllTopics, listSubjects, seedIfEmpty, getSettings, se
 import { renderSidebar, renderAll, renderSubject, renderTabBar, renderTopic } from './ui/views'
 import { renderLibrary } from './ui/library'
 import { openImport, renderBooks } from './ui/books'
+import { openScanDialog } from './ui/scan'
 import { closeReader, patchReader, renderReader } from './ui/reader'
 import { listBooks } from './core/db'
 import { renderNote } from './ui/note'
@@ -106,6 +107,11 @@ function bindShortcuts() {
     if (mod && e.shiftKey && e.key.toLowerCase() === 'l') {
       e.preventDefault()
       void quickCaptureLink()
+      return
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 's') {
+      e.preventDefault()
+      void openScanDialog()
       return
     }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'b') {

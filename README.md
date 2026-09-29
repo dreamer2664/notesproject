@@ -8,7 +8,7 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-Other commands: `npm run build` (typecheck + production bundle), `npm test` (38 unit tests + a jsdom smoke test that boots the real app, reader and all), `npm run typecheck`.
+Other commands: `npm run build` (typecheck + production bundle), `npm test` (49 unit tests + a jsdom smoke test that boots the real app — reader, pen, scan dialog, study worker, and all), `npm run typecheck`.
 
 ---
 
@@ -25,6 +25,8 @@ Other commands: `npm run build` (typecheck + production bundle), `npm test` (38 
 **Two appearances.** Follows your system setting, or pin one from the sidebar. Colours, spacing and fonts are all in one file — see *Theming* below.
 
 **Textbooks are a first-class content type.** `Ctrl+Shift+B` opens the import dialog: drop an EPUB (the one Adobe Digital Editions / laZ / "libro liquido" hand you), a PDF, or a folder of page images. Pages become image + text, with **local OCR** (Italian model vendored inside the app, so it works with the wifi off). The reader is split-screen — page on the left, `Testo / Appunti / AI / Cerca` on the right — and `p` gives you a pen that writes on the page itself. See [`docs/LIBRI-AI-PENNA.md`](docs/LIBRI-AI-PENNA.md) (Italian) for the per-publisher how-to.
+
+**Screenshots in, notes out.** `Ctrl+Shift+S`: drop thirty screenshots of pages/slides, pick how hard the local model should think (Veloce / Standard / Profondo — it really changes image count, passes and token budget), set a minimum time. Finished early? The leftover time goes into *"what would make studying this easier"* (schemas, comparison tables, extra flashcards) until 60% of your budget, then it stops. Notes are built **only** from what was read off your images — the prompts carry no URL, and any non-local endpoint is refused before a request is made (there is a test for that). Optional, off-by-default last step: up to 4 `YT:` search phrases become plain YouTube *search* links — nothing is fetched, nothing is read.
 
 **AI with no key, no cloud, no bill.** The AI tab talks to **Ollama on your own machine** (`127.0.0.1:11434`) — no API key, no account, nothing leaves the PC. Retrieval is done in-app (BM25 over the book, Italian stemmer), so the model gets the pages that actually matter, with page numbers that are clickable in the answer. No model installed? The tab still answers honestly by quoting the book.
 
@@ -63,6 +65,8 @@ src/
     import.ts         the four doors in: EPUB (own zip reader), PDF (pdf.js), page images + OCR, blank book
     search.ts         BM25 with an Italian stemmer, chunking, snippets, page citations
     ai.ts             Ollama over fetch: config, streaming, context building, retrieval fallback
+    screenshot.ts     screenshots -> transcript -> notes: effort dials, time budget, YT phrase filter
+    study.ts          background "study ahead": per-page digests that make later answers faster
     ink.ts            vector pen/highlighter/eraser, palm rejection, toolbar, SVG export
     fs.ts             folder read/write (File System Access API + <input> fallback), link detection, image downscaling
     util.ts           ids, sanitising, dates, small text helpers
@@ -74,6 +78,7 @@ src/
     reader.ts         the textbook reader: split panes, page ink, search, AI panel, book tools
     books.ts          import dialog, book cards, export-a-book-to-folder
     ai-settings.ts    the Ollama dialog (model, vision, context size), reachable from ⌘K too
+    scan.ts           the screenshot dialog, and the reader's "study ahead" strip
     palette.ts        ⌘K search + commands
     actions.ts        every create / rename / move / delete / import / export flow
     dom.ts            element helper, modal, toast, confirm

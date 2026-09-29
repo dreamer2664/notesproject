@@ -256,6 +256,34 @@ const run = async () => {
     'code block content was lost while saving',
   )
 
+  // jsdom has no fetch: Ollama must look unreachable, and the app must cope.
+  Object.defineProperty(window, 'fetch', { value: () => Promise.reject(new Error('offline')), configurable: true })
+  // pretend a model is configured, so the offline paths are the interesting ones
+  window.localStorage.setItem('notes.ai.v1', JSON.stringify({ model: 'qwen2.5:3b', vision: 'qwen2.5vl:3b', useVision: true, studyAhead: false }))
+
+  /* ------------------------------------------------ screenshots -> notes */
+  const { openScanDialog, runScan } = window.__notesTest
+  await openScanDialog([])
+  await tick(250)
+  assert.ok(doc.querySelector('.scan-drop'), 'scan dialog did not mount')
+  assert.equal(doc.querySelectorAll('.effort-card').length, 3, 'the three thinking dials are not there')
+  const effortLabels = Array.from(doc.querySelectorAll('.effort-card b')).map((n) => n.textContent)
+  assert.deepEqual(effortLabels, ['Veloce', 'Standard', 'Profondo'], `wrong dials: ${effortLabels}`)
+  const webBox = doc.querySelector('.scan-modal .inline-check:has(.web-note) input') ?? Array.from(doc.querySelectorAll('.scan-modal input[type=checkbox]')).at(-1)
+  assert.ok(webBox && webBox.checked === false, 'the YouTube step must start OFF')
+  assert.ok(runBtnDisabled(), 'run button must be inert with no images')
+  function runBtnDisabled() {
+    return doc.querySelector('.scan-modal .btn.primary')?.disabled === true
+  }
+  doc.querySelector('.scrim.scan-scrim')?.remove()
+
+  const onePx = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+  const offline = await runScan({ images: [onePx, onePx], effort: 'standard', autoTime: true, useVision: true, keepTranscript: true, allowWeb: false })
+  assert.match(offline.error ?? '', /OCR|visione/i, 'with no vision model and no OCR, the scan must explain itself, not throw')
+  assert.equal(offline.notes, '', 'a failed read must not invent notes')
+  assert.equal(offline.videos.length, 0, 'no links when the web step is off')
+  console.log('  ok   scan: three dials, web off by default, honest failure with no model')
+
   const linkNotes = vault.notes.filter((n) => n.blocks.some((b) => b.type === 'link')).length
 
   /* ------------------------------------------------ books, reader, pen, AI */
@@ -324,9 +352,25 @@ const run = async () => {
   askBtn?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await tick(900)
   const msg = doc.querySelector('.ai-msg.ai')
-  assert.ok(msg, 'asking without a local model produced no answer at all')
-  assert.ok((msg.textContent ?? '').length > 20, 'the no-model fallback should still quote the book')
-  assert.ok(doc.querySelector('.ai-msg.ai a.cite, .ai-msg.ai .ai-mode'), 'fallback answer lost its citations/mode note')
+  assert.ok(msg, 'asking without a reachable model produced no answer at all')
+  assert.ok(
+    (msg.textContent ?? '').length > 20,
+    'the answer should either quote the book or explain the failure, not sit empty',
+  )
+
+  // the reader's "study ahead" strip: seeded digest visible, worker stops when offline
+  const aiTab2 = Array.from(doc.querySelectorAll('.side-tab')).find((t) => (t.textContent ?? '').trim() === 'AI')
+  aiTab2?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(300)
+  assert.ok(doc.querySelector('.study-strip'), 'AI tab has no study-ahead strip')
+  assert.match(doc.querySelector('.study-head')?.textContent ?? '', /1\/4/, `the seeded digest is not counted: ${doc.querySelector('.study-head')?.textContent}`)
+  const schedBtn = Array.from(doc.querySelectorAll('.study-strip .btn')).find((b) => /estudia/.test(b.textContent ?? ''))
+  assert.ok(schedBtn, 'no button to start background studying')
+  schedBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await tick(500)
+  assert.match(doc.querySelector('.study-paused')?.textContent ?? '', /Ollama non risponde|nessun modello/, 'the worker must stop and say why when Ollama is offline')
+  assert.ok(!doc.querySelector('.study-run'), 'the worker still reports itself running after stopping')
+  console.log('  ok   study: digests counted, background worker stops on an offline endpoint')
 
   // handwriting straight from the editor, through a page block
   await openImportProbe()

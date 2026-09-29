@@ -2,6 +2,7 @@ import { listBooks, listTopics, pageTexts, searchNotes } from '../core/db'
 import { Bm25, buildIndex } from '../core/search'
 import { openImport } from './books'
 import { aiSettingsModal } from './ai-settings'
+import { openScanDialog } from './scan'
 import { exportToFolder, importFromFolder, newNote, newSubject, newTopic, quickCaptureLink, refreshFromFolder } from './actions'
 import { el } from './dom'
 import { icon } from './icons'
@@ -68,6 +69,7 @@ export async function openPalette(initialQuery = '') {
       { label: 'Link library', group: 'Go to', glyph: icon('link'), run: () => (location.hash = routes.library('all')) },
       { label: 'Testi (libri importati)', group: 'Go to', glyph: icon('book'), run: () => (location.hash = routes.books) },
       { label: 'Import a book', hint: 'EPUB · PDF · immagini', group: 'Create', glyph: icon('upload'), run: () => void openImport() },
+      { label: 'Screenshot → appunti', hint: 'le immagini non lasciano il PC', group: 'Create', glyph: icon('image'), run: () => void openScanDialog() },
       { label: 'AI locale: modello, visione, contesto', group: 'App', glyph: icon('menu'), run: () => void aiSettingsModal() },
       { label: 'All subjects', group: 'Go to', glyph: icon('grid'), run: () => (location.hash = routes.all) },
       ...App.subjects.map((s) => ({ label: s.name, hint: 'subject', group: 'Go to', glyph: `<span class="pal-emoji">${s.emoji}</span>`, run: () => (location.hash = routes.subject(s.id)) })),

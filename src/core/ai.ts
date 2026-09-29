@@ -1,4 +1,5 @@
 import { getPage, pageTexts } from './db'
+import { digestContext } from './study'
 import { Bm25, buildIndex, citePage } from './search'
 import type { Book } from './types'
 
@@ -20,6 +21,10 @@ export interface AiConfig {
   language: 'italiano' | 'english'
   /** rough character budget for retrieved context */
   contextChars: number
+  /** read pages in the background so later answers are faster and better */
+  studyAhead: boolean
+  /** how many pages per idle round */
+  studyAheadBatch: number
   temperature: number
 }
 
@@ -30,6 +35,8 @@ export const DEFAULT_AI: AiConfig = {
   useVision: false,
   language: 'italiano',
   contextChars: 9000,
+  studyAhead: false,
+  studyAheadBatch: 6,
   temperature: 0.2,
 }
 
@@ -104,6 +111,12 @@ export interface AskOptions {
   page?: number
   /** optional image (data URL) to send to a vision model */
   image?: string
+  /** send several images at once (screenshots of a figure set) */
+  images?: string[]
+  /** include the page digests the background study worker produced */
+  useDigests?: boolean
+  /** student's own text (transcribed screenshots) to reason over */
+  extra?: string
   /** override the retrieved context with a fixed passage, e.g. a selection */
   passage?: string
   index?: Bm25
@@ -154,12 +167,21 @@ export function fitChunks(chunks: { page: number; text: string; score: number }[
   return out
 }
 
+/** When the local model has already "studied" a page, its map leads the context. */
+export interface ContextExtras {
+  /** prepend the study digests of the pages in play (see core/study.ts) */
+  useDigests?: boolean
+  /** extra material that is not from the book: e.g. a screenshot transcription */
+  extra?: string
+}
+
 export async function buildContext(
   book: Book | undefined,
   page: number | undefined,
   question: string,
   config: AiConfig,
   index?: Bm25,
+  extras?: ContextExtras,
 ): Promise<{ context: string; sources: { page: number; text: string }[]; idx: Bm25 | null }> {
   if (!book) return { context: '', sources: [], idx: null }
   let idx = index
@@ -192,7 +214,10 @@ export async function buildContext(
       Math.max(0, budget - parts.join('\n\n').length),
     )
   }
+  const digests = extras?.useDigests && book ? await digestContext(book.id, [...used]) : ''
   const all = [
+    ...(digests ? [`## Le tue schede di studio (già lette in precedenza)\n\n${digests}`] : []),
+    ...(extras?.extra ? [`## Materiale dello studente\n\n${extras.extra.slice(0, 6000)}`] : []),
     ...(used.size ? [`## Pagina aperta (${book.title})\n\n${parts.join('\n\n')}`] : []),
     ...(retrieved.length
       ? [`## Brani rilevanti dal resto del libro\n\n${retrieved.map((r) => `### p. ${r.page}\n${r.text}`).join('\n\n')}`]
@@ -208,10 +233,11 @@ export const dropIndex = (bookId: string) => indexCache.delete(bookId)
 /* ------------------------------------------------------------- the call */
 
 export async function ask(question: string, opts: AskOptions): Promise<AskResult> {
-  const { config, book, page, image, task, onToken, index } = opts
+  const { config, book, page, image, images, task, onToken, index } = opts
+  const pics = [...(images ?? []), ...(image ? [image] : [])]
   const instruction = TASKS.find((t) => t.key === task)?.prompt ?? ''
 
-  const built = await buildContext(book, page, question, config, index)
+  const built = await buildContext(book, page, question, config, index, { useDigests: opts.useDigests ?? true, extra: opts.extra })
   let context = built.context
   if (opts.passage) context = `## Passaggio selezionato\n${opts.passage}\n\n${context}`
 
@@ -226,7 +252,7 @@ export async function ask(question: string, opts: AskOptions): Promise<AskResult
     return { text: retrievalAnswer(question, context, book), sources: sources.map((s) => ({ page: s.page, text: s.text })), mode: 'retrieval' }
   }
 
-  const wantsImage = !!image && config.useVision && !!config.vision
+  const wantsImage = !!pics.length && config.useVision && !!config.vision
   const userText = [
     question.trim() || instruction,
     instruction && question.trim() ? instruction : '',
@@ -237,7 +263,7 @@ export async function ask(question: string, opts: AskOptions): Promise<AskResult
 
   const messages = [
     { role: 'system', content: systemPrompt(config) },
-    { role: 'user', content: userText, ...(wantsImage ? { images: [image!.split(',')[1] ?? ''] } : {}) },
+    { role: 'user', content: userText, ...(wantsImage ? { images: pics.map((d) => d.split(',')[1] ?? '') } : {}) },
   ]
 
   const id = `${Date.now()}`
@@ -312,10 +338,10 @@ export const stopAll = () => {
   controller.clear()
 }
 
-function humaniseOllamaError(status: number, detail: string, model: string) {
+export function humaniseOllamaError(status: number, detail: string, model: string) {
   const d = detail.toLowerCase()
   if (status === 404 || d.includes('not found')) return `Modello "${model}" non installato: lancia  ollama pull ${model}`
-  if (d.includes('no space')) return ' Disco pieno: Ollama non ha spazio per caricare il modello.'
+  if (d.includes('no space')) return 'Disco pieno: Ollama non ha spazio per caricare il modello.'
   if (d.includes('overflow') || d.includes('context length')) return 'Contesto troppo lungo per questo modello: riduci i caratteri recuperati nelle impostazioni AI.'
   if (status === 500) return `Il modello ha fallito (${detail.slice(0, 160)})`
   return `Ollama ha risposto ${status}${detail ? `: ${detail.slice(0, 200)}` : ''}`

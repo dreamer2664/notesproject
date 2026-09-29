@@ -6,6 +6,7 @@ import { dropIndex } from '../core/ai'
 import { canPickFolder, ensurePermission, pickFolder, writeFilesToFolder } from '../core/fs'
 import { vaultToBookFiles } from '../core/md'
 import { el, modal, toast } from './dom'
+import { openScanDialog } from './scan'
 import { icons } from './icons'
 import { App, routes } from './state'
 
@@ -266,7 +267,8 @@ export async function renderBooks(host: HTMLElement) {
   const head = el('div', { class: 'lib-head' },
     el('h1', { class: 'lib-title' }, el('span', { text: 'Testi' })),
     el('p', { class: 'lede dim', text: books.length ? `${books.length} libri in archivio, sul tuo dispositivo. Clicca per aprire il lettore.` : 'EPUB, PDF o cartelle di pagine: qui dentro diventano libri cercabili, con OCR e penna.' }),
-    el('button', { class: 'btn primary', type: 'button', text: 'Importa un libro', onclick: () => void openImport() }))
+    el('button', { class: 'btn primary', type: 'button', text: 'Importa un libro', onclick: () => void openImport() }),
+    el('button', { class: 'btn', type: 'button', text: 'Screenshot → appunti', onclick: () => void openScanDialog() }))
   wrap.append(head)
   if (!books.length) {
     wrap.append(el('div', { class: 'empty' }, el('p', { class: 'empty-big', text: 'Nessun libro, per ora' }), el('p', { class: 'lede', text: 'Il modo più rapido: dal sito della casa editrice scarica l’EPUB (laZ: “Download ebook” → Adobe Digital Editions; Sanoma: “libro liquido”), poi trascinalo qui.' })))

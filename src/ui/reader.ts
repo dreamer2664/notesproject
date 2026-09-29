@@ -22,6 +22,8 @@ import { downloadText, ensurePermission, pickFolder, writeFilesToFolder } from '
 import { vaultToBookFiles } from '../core/md'
 import { aiSettingsModal } from './ai-settings'
 import { el, modal, toast } from './dom'
+import { studyStrip } from './scan'
+import { maybeStudyAhead } from '../core/study'
 import { icons } from './icons'
 import { App, routes } from './state'
 
@@ -312,6 +314,7 @@ export async function renderReader(host: HTMLElement, bookId: string, startPage:
   const renderAiTab = () => {
     sideBody.replaceChildren(aiBody)
     void refreshAiState()
+    aiBody.prepend(studyStrip(book.id, page, () => void renderAiTab()))
   }
 
   const refreshAiState = async () => {
@@ -362,6 +365,7 @@ export async function renderReader(host: HTMLElement, bookId: string, startPage:
       task: task === 'domanda' ? undefined : task,
       index: index ?? undefined,
       image: cfg.useVision && cfg.vision ? current?.image : undefined,
+      useDigests: true,
       onToken: (_c, full) => {
         acc = full
         holder.classList.remove('pending')
@@ -436,6 +440,7 @@ export async function renderReader(host: HTMLElement, bookId: string, startPage:
   /* ------------------------------------------------------------ start up */
   await renderPage()
   await renderSide()
+  void maybeStudyAhead(book, page)
   signal.addEventListener('abort', () => {
     if (active?.bookId === book.id) active = null
     stopAll()

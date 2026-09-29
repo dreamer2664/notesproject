@@ -156,3 +156,37 @@ export interface VaultTree {
 
 export const isTextBlock = (b: Block) =>
   b.type !== 'divider' && b.type !== 'image' && b.type !== 'link' && b.type !== 'code'
+
+/** A page the local model has already "studied" — its map, kept next to the book. */
+export interface Digest {
+  id: string
+  bookId: string
+  page: number
+  at: number
+  /** the four sections, as markdown */
+  md: string
+  keyIdeas: string[]
+  definitions: string[]
+  examQuestions: string[]
+  links: string[]
+  /** how much page text the digest was made from */
+  chars: number
+  error?: string
+}
+
+/** One screenshot -> notes run, kept so a crashed/aborted run is not lost. */
+export interface ScanRun {
+  id: string
+  at: number
+  effort: string
+  imageCount: number
+  usedVision?: boolean
+  minutes?: number
+  notes: string
+  flashcards?: string
+  extras?: string
+  transcript?: string[]
+  videos?: { title: string; url: string }[]
+  bookId?: string
+  error?: string
+}

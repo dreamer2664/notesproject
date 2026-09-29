@@ -22,6 +22,8 @@ export async function aiSettingsModal(afterSave?: () => void) {
   const ctxRow = el('div', { class: 'field-inline' }, ctxLabel, ' ', ctx)
   const lang = el('select', { class: 'field', 'data-field': 'language' }, opt('italiano', cfg.language), opt('english', cfg.language))
   const visionOn = el('input', { type: 'checkbox', 'data-field': 'vision', ...(cfg.useVision ? { checked: true } : {}) })
+  const studyOn = el('input', { type: 'checkbox', 'data-field': 'studyAhead', ...(cfg.studyAhead ? { checked: true } : {}) })
+  const studyBatch = el('input', { class: 'field', type: 'number', min: '2', max: '30', value: String(cfg.studyAheadBatch) })
   const body = el(
     'div',
     { class: 'ai-settings' },
@@ -45,6 +47,7 @@ export async function aiSettingsModal(afterSave?: () => void) {
     field('Caratteri di libro mandati al modello', ctxRow),
     field('Lingua delle risposte', lang),
     field('Leggi anche l’immagine della pagina', el('span', { class: 'inline-check' }, visionOn)),
+    field('Studia le pagine in background', el('span', { class: 'inline-check' }, studyOn, el('span', { class: 'lede dim', text: `legge ~${studyBatch.value} pagine per volta vicino a dove stai leggendo: risposte più rapide, meno invenzioni` }))),
   )
   const scrim = el('div', { class: 'scrim ai-scrim' }, el('div', { class: 'modal wide' },
     el('header', {}, el('h2', { text: 'AI locale (Ollama)' }), el('p', { class: 'sub', text: 'Nessuna API a pagamento, nessuna chiave: gira sul tuo PC.' })),
@@ -59,6 +62,8 @@ export async function aiSettingsModal(afterSave?: () => void) {
       vision: v,
       useVision: visionOn.checked && !!v,
       contextChars: Number(ctx.value) || DEFAULT_AI.contextChars,
+      studyAhead: studyOn.checked,
+      studyAheadBatch: Math.max(2, Math.min(30, Number(studyBatch.value) || DEFAULT_AI.studyAheadBatch)),
       language: lang.value as AiConfig['language'],
     })
     scrim.remove()

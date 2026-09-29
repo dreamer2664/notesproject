@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { Block, Book, InkStroke, Note, Page, Revision, Settings, Subject, Topic, Vault } from './types'
+import type { Block, Book, Digest, InkStroke, Note, Page, Revision, ScanRun, Settings, Subject, Topic, Vault } from './types'
 
 /** Anything we need to remember that is not a note: e.g. the folder handle for syncing. */
 interface MetaEntry {
@@ -22,6 +22,8 @@ class NotesDB extends Dexie {
   meta!: Table<MetaEntry, string>
   books!: Table<Book, string>
   pages!: Table<Page, string>
+  digests!: Table<Digest, string>
+  scanRuns!: Table<ScanRun, string>
 
   constructor() {
     super('notes')
@@ -35,6 +37,10 @@ class NotesDB extends Dexie {
     this.version(3).stores({
       books: 'id, title, subjectId, updatedAt',
       pages: 'id, bookId, n, [bookId+n]',
+    })
+    this.version(4).stores({
+      digests: 'id, bookId, page, [bookId+page], at',
+      scanRuns: 'id, at, bookId',
     })
   }
 }
@@ -285,7 +291,7 @@ export async function exportVault(): Promise<Vault> {
 export async function replaceVault(vault: Vault) {
   await db.transaction(
     'rw',
-    [db.subjects, db.topics, db.notes, db.revisions, db.books, db.pages],
+    [db.subjects, db.topics, db.notes, db.revisions, db.books, db.pages, db.digests],
     async (tx) => {
       const tables = {
         subjects: db.subjects,
@@ -294,9 +300,11 @@ export async function replaceVault(vault: Vault) {
         revisions: db.revisions,
         books: db.books,
         pages: db.pages,
+        digests: db.digests,
       }
+      // digests are regenerable, but a replaced vault means "start from these files"
       await Promise.all(
-        [tables.subjects, tables.topics, tables.notes, tables.revisions, tables.books, tables.pages].map((t) => t.clear()),
+        [tables.subjects, tables.topics, tables.notes, tables.revisions, tables.books, tables.pages, tables.digests].map((t) => t.clear()),
       )
       void tx
       await tables.subjects.bulkPut(vault.subjects ?? [])
@@ -378,6 +386,7 @@ export async function pageTexts(bookId: string) {
 }
 export async function deleteBook(id: string) {
   await db.pages.where('bookId').equals(id).delete()
+  await db.digests.where('bookId').equals(id).delete()
   await db.books.delete(id)
 }
 /** Rough size of a book's images, for the "this will cost you MB" warning. */
@@ -385,6 +394,21 @@ export async function bookBytes(bookId: string) {
   const pages = await db.pages.where('bookId').equals(bookId).toArray()
   return pages.reduce((sum, p) => sum + (p.image ? Math.round(p.image.length * 0.75) : 0), 0)
 }
+
+/* --------------------------------------------------------- digests & scans */
+
+export const digestFor = (bookId: string, page: number) => db.digests.where('[bookId+page]').equals([bookId, page]).first()
+export const listDigests = (bookId: string) =>
+  db.digests.where('bookId').equals(bookId).toArray().then((ds) => ds.sort((a, b) => a.page - b.page))
+export async function putDigest(digest: Digest) {
+  await db.digests.put(digest)
+}
+export const digestCount = (bookId: string) => db.digests.where('bookId').equals(bookId).count()
+export async function putScanRun(run: ScanRun) {
+  await db.scanRuns.put(run)
+}
+export const listScanRuns = (limit = 20) => db.scanRuns.orderBy('at').reverse().limit(limit).toArray()
+export const deleteScanRun = (id: string) => db.scanRuns.delete(id)
 
 /* ------------------------------------------------------------------- seeds */
 
@@ -513,6 +537,32 @@ export async function seedIfEmpty(): Promise<boolean> {
         : {}),
     })),
   )
+
+  /* One page the local model has already "studied": the reader shows the strip filled. */
+  await db.digests.put({
+    id: `d_${sampleBook.id}_2`,
+    bookId: sampleBook.id,
+    page: 2,
+    at: Date.now(),
+    md: [
+      '**Idee** (p. 2)',
+      '- La derivata è un operatore lineare: deriva di una somma = somma delle derivate',
+      '- Prodotto e quoziente hanno regole proprie, non banali',
+      '',
+      '**Definizioni** (p. 2)',
+      '- (f·g)\'= f\'g + fg\': il prodotto non si deriva "a pezzi"',
+      '- (f/g)\'= (f\'g - fg\')/g², con g diverso da zero',
+      '',
+      '**Domande** (p. 2)',
+      '- Perché la derivata di un prodotto ha due termini?',
+      '- Che condizione serve per applicare la regola del quoziente?',
+    ].join('\n'),
+    keyIdeas: ['La derivata è un operatore lineare: deriva di una somma = somma delle derivate', 'Prodotto e quoziente hanno regole proprie, non banali'],
+    definitions: ['(f·g)\'= f\'g + fg\' — il prodotto non si deriva a pezzi', "(f/g)'= (f'g - fg')/g\u00b2, con g diverso da zero"],
+    examQuestions: ['Perché la derivata di un prodotto ha due termini?', 'Che condizione serve per applicare la regola del quoziente?'],
+    links: ['La pagina 1 introduce il rapporto incrementale: senza quello, le regole sembrano formule magiche'],
+    chars: 260,
+  })
 
   await setSettings({ seeded: true })
   return true

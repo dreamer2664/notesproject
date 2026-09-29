@@ -4,6 +4,8 @@
  * so the real md.ts / fs.ts code paths are exercised — no re-implemented logic.
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { blockToMd, mdToBlocks, noteToMd, treeToVault, vaultToFiles, inlineToMd } from '../src/core/md'
 import { filesToTree, linkInfo } from '../src/core/fs'
 import { chunkPage, Bm25, buildIndex, tokenize, stem, citePage } from '../src/core/search'
@@ -11,14 +13,29 @@ import { pdfItemsToText, cleanOcr } from '../src/core/import'
 import { inkToSvg, svgToInk } from '../src/core/md'
 import { PALETTE, packPoints, unpackPoints, eraseAt, strokePaths } from '../src/core/ink'
 import type { InkStroke } from '../src/core/types'
+import { EFFORT, extractQueries, sanitiseQuery, shouldEnrich, splitTranscript, ytSearchUrl, chat } from '../src/core/screenshot'
+import { parseDigest, digestToMd } from '../src/core/study'
 import type { Block, Note } from '../src/core/types'
+
+function readSource(rel: string): string {
+  // the bundle may live under node_modules/.tmp, so walk up until the repo root is found
+  let dir = process.cwd()
+  for (let i = 0; i < 6; i++) {
+    try {
+      return readFileSync(join(dir, rel), 'utf8')
+    } catch {
+      dir = join(dir, '..')
+    }
+  }
+  throw new Error(`cannot find ${rel} from ${process.cwd()}`)
+}
 
 let n = 0
 const block = (type: Block['type'], extra: Partial<Block> = {}): Block => ({ id: `b${++n}`, type, ...extra })
 const note = (blocks: Block[]): Note => ({ id: 'n1', topicId: 't1', title: 'Test note', icon: '📝', blocks, createdAt: 1, updatedAt: 1 })
 
-const tests: [string, () => void][] = []
-const test = (name: string, fn: () => void) => tests.push([name, fn])
+const tests: [string, () => void | Promise<void>][] = []
+const test = (name: string, fn: () => void | Promise<void>) => tests.push([name, fn])
 
 /* ---------------------------------------------------------------- inline */
 test('inline: bold/italic/code/link survive the trip to markdown', () => {
@@ -337,11 +354,95 @@ test('md: an empty page block writes nothing', () => {
   assert.equal(blockToMd(block('page', {})), '')
 })
 
+/* ------------------------------------------------- screenshots -> notes */
+test('scan: transcript blocks are split per image, even when the label drifts', () => {
+  const raw = '=== 1 ===\nLa derivata misura la pendenza.\n=== pagina 2 ===\nf(x) = x^2\n=== 3 ===\nesempi in coda'
+  assert.deepEqual(splitTranscript(raw, 3), ['La derivata misura la pendenza.', 'f(x) = x^2', 'esempi in coda'])
+})
+test('scan: a model that ignores the format still yields its text', () => {
+  const parts = splitTranscript('tutto in un pezzo solo, senza numeri', 4)
+  assert.equal(parts.length, 4)
+  assert.match(parts[0]!, /tutto in un pezzo/)
+})
+test('scan: empty images stay empty instead of stealing the next block', () => {
+  const parts = splitTranscript('=== 1 ===\n\n=== 2 ===\nciao', 3)
+  assert.deepEqual(parts, ['', 'ciao', ''])
+})
+test('scan: effort dials really change the work, not just the label', () => {
+  assert.equal(EFFORT.veloce.maxImages, 8)
+  assert.equal(EFFORT.standard.maxImages, 0, 'standard must look at every image')
+  assert.ok(EFFORT.profondo.maxTokens > EFFORT.standard.maxTokens)
+  assert.ok(EFFORT.veloce.minMinutes < EFFORT.standard.minMinutes)
+  assert.equal(EFFORT.veloce.allowWeb, false, 'the fast dial never touches the web')
+  assert.equal(EFFORT.veloce.cards, false)
+})
+test('scan: the time budget means leftover time is used, then given up', () => {
+  assert.equal(shouldEnrich({ elapsedMs: 10_000, minutes: 4, auto: true, requested: true }), true)
+  assert.equal(shouldEnrich({ elapsedMs: 200_000, minutes: 4, auto: true, requested: true }), false, 'past 60% of the budget we stop, even in auto')
+  assert.equal(shouldEnrich({ elapsedMs: 600_000, minutes: 4, auto: false, requested: true }), true, 'a hard minimum keeps working')
+  assert.equal(shouldEnrich({ elapsedMs: 0, minutes: 4, auto: true, requested: false }), false, 'no cards if the dial says no')
+  assert.equal(shouldEnrich({ elapsedMs: 0, minutes: 0, auto: true, requested: true }), true, 'no budget = enrich as long as you like')
+})
+test('scan: a search phrase is allowed, a URL never is', () => {
+  assert.equal(sanitiseQuery('YT: derivata geometrica lezione'), 'derivata geometrica lezione')
+  assert.equal(sanitiseQuery('QUERY =  auto e derivate '), 'auto e derivate')
+  assert.equal(sanitiseQuery('guarda https://youtube.com/watch?v=x'), null)
+  assert.equal(sanitiseQuery('www.youtube.com/results?q=test'), null)
+  assert.equal(sanitiseQuery('<img src=x onerror=1>'), null)
+  assert.equal(sanitiseQuery('solo'), null, 'one-word queries are too vague to be worth a click')
+  assert.equal(sanitiseQuery('cartella/../../etc/passwd'), null)
+})
+test('scan: only YT: lines become links, and only through the search page', () => {
+  const raw = ['YT: teorema di Taylor', ' yt : derivate delle funzioni notevoli', '- YT: integrali definiti', 'YT: https://evil.example/p', 'guarda questo video', 'YT: un'].join('\n')
+  const qs = extractQueries(raw)
+  assert.deepEqual(qs, ['teorema di Taylor', 'derivate delle funzioni notevoli', 'integrali definiti'])
+  assert.equal(ytSearchUrl('teorema di Taylor'), 'https://www.youtube.com/results?search_query=teorema%20di%20Taylor')
+  assert.ok(!ytSearchUrl('a b').includes('&'), 'nothing but the query is sent')
+})
+test('scan: nothing in the writing prompts can reach the web', () => {
+  const src = readSource('src/core/screenshot.ts')
+  assert.ok(src.includes('localhost'), 'the local-only guard disappeared')
+  assert.ok(src.includes('Nessun accesso a internet'), 'the chat system prompt lost its no-network line')
+  assert.ok(!/fetch\s*\(\s*['"`]https?:/.test(src), 'a hardcoded remote URL appeared in the scan engine')
+  assert.ok(src.includes('localhost') && src.includes('127'), 'the local-only endpoint guard disappeared')
+  for (const bad of ['fetch(', 'XMLHttpRequest', 'import(']) {
+    const hits = (src.match(new RegExp(bad.replace(/[.()\\[\]]/g, '\\$&'), 'g')) ?? []).length
+    assert.ok(hits <= 2, `the scan engine grew too many network calls (${bad}: ${hits})`)
+  }
+  assert.ok(!/api\.groq|generativelanguage|openrouter|api\.openai|googleapis/.test(src), 'a cloud AI endpoint leaked into the scan engine')
+})
+test('scan: a non-local endpoint is refused before any request is made', async () => {
+  const res = await chat({
+    model: 'x',
+    text: 'ciao',
+    config: { endpoint: 'https://api.groq.com/openai/v1', model: 'x', vision: '', useVision: false, language: 'italiano', contextChars: 9000, studyAhead: false, studyAheadBatch: 6, temperature: 0.2 },
+    maxTokens: 100,
+  })
+  assert.match(res.error ?? '', /può girare solo sul tuo PC/)
+})
+
+/* -------------------------------------------------- the study digests */
+test('study: the digest parser is forgiving about how the model decorates labels', () => {
+  const raw = '**IDEATUTTI:**\n- la derivata è un limite\n* DEFINIZIONI\npendenza = rapporto incrementale\n**Domande**\n1) perché è un limite?\nCOLLEGAMENTI:'
+  const d = parseDigest(raw)
+  assert.deepEqual(d.keyIdeas, ['la derivata è un limite'])
+  assert.deepEqual(d.definitions, ['pendenza = rapporto incrementale'])
+  assert.deepEqual(d.examQuestions, ['perché è un limite?'])
+  assert.deepEqual(d.links, [])
+})
+test('study: a digest renders as markdown with page citations', () => {
+  const md = digestToMd({ keyIdeas: ['a'], definitions: ['b = c'], examQuestions: [], links: ['d'] }, 12)
+  assert.match(md, /\*\*Idee\*\* \(p\. 12\)/)
+  assert.match(md, /- b = c/)
+  assert.ok(!md.includes('Domande'), 'empty sections must not be printed')
+})
+
 /* -------------------------------------------------------------- run them */
 let failed = 0
+const main = async () => {
 for (const [name, fn] of tests) {
   try {
-    fn()
+    await fn()
     console.log(`  ok   ${name}`)
   } catch (err) {
     failed++
@@ -351,3 +452,5 @@ for (const [name, fn] of tests) {
 }
 console.log(`\n${tests.length - failed}/${tests.length} passed${failed ? ` · ${failed} FAILED` : ''}`)
 process.exit(failed ? 1 : 0)
+}
+void main()

@@ -12,6 +12,7 @@ import { fmtRelative, htmlToText } from '../core/util'
 import { icons } from './icons'
 import { App, routes, type Route } from './state'
 import { bookCard, openImport, renderSubjectBooks } from './books'
+import { openScanDialog } from './scan'
 import {
   newNote,
   newSubject,
@@ -273,6 +274,7 @@ export async function renderAll(host: HTMLElement) {
         h('p', { class: 'lede', text: `${App.subjects.length} subject${App.subjects.length === 1 ? '' : 's'} · ${notes.length} note${notes.length === 1 ? '' : 's'}. Press ⌘K to jump anywhere.` })),
       h('div', { class: 'view-head-actions' },
         h('button', { class: 'btn', type: 'button', html: `${icons.book}<span>Importa libro</span>`, onclick: () => void openImport() }),
+        h('button', { class: 'btn', type: 'button', html: `${icons.image}<span>Screenshot → appunti</span>`, onclick: () => void openScanDialog() }),
         h('button', { class: 'btn primary', type: 'button', html: `${icons.plus}<span>New subject</span>`, onclick: () => void newSubject() }))),
   )
   if (!App.subjects.length) {

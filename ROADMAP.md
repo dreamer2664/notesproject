@@ -9,6 +9,20 @@ Deliberately short. v0.1 is usable for real note-taking; everything below is a n
 - [ ] Remembered caret position per note, so reopening lands where you left off.
 - [ ] Word-count goal / study-session timer per subject (optional, off by default).
 
+## v0.2.6 — shipped: screenshots → notes, study ahead
+
+- `Ctrl+Shift+S`: pile of screenshots -> local transcript (vision model, or Tesseract) -> notes,
+  with three thinking dials that change image cap / batches / passes / token budget.
+- Minimum-time budget: leftover minutes buy a "what would make studying easier" pass, capped at
+  60% of the budget in auto mode; hard minimum if auto is off.
+- Notes are built only from the images: prompts carry no URL, non-local endpoints are refused
+  before fetch (unit-tested), and the transcript stays editable with a re-generate button.
+- Optional, off by default: <=4 `YT:` search phrases -> plain YouTube search links, filtered to
+  words only (no URLs, no markup). The app never opens or reads them.
+- Result lands in a note as real blocks (flashcards -> toggles), or appended to the open note.
+- Study ahead: local model reads pages near you into per-page digests (ideas/definitions/questions/
+  links), stored in `digests`, and used as context for later answers; stop/pause/clear from the reader.
+
 ## v0.2.5 — shipped: textbooks, local AI, pen
 
 - Book/Page data model + Dexie v3, four import doors (EPUB with a hand-rolled zip reader, PDF via pdf.js, page images, blank paste-per-page).
